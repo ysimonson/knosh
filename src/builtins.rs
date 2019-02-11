@@ -42,11 +42,11 @@ impl Interpreter {
             interp,
             pipe_operator_name,
             traps: [
-                Rc::new(TrapMap::new("signal-interrupt")),
-                Rc::new(TrapMap::new("signal-continue")),
-                Rc::new(TrapMap::new("signal-resize")),
-                Rc::new(TrapMap::new("signal-suspend")),
-                Rc::new(TrapMap::new("signal-quit")),
+                Rc::new(TrapMap::new("signal-continue", 0)),
+                Rc::new(TrapMap::new("signal-interrupt", 1)),
+                Rc::new(TrapMap::new("signal-quit", 2)),
+                Rc::new(TrapMap::new("signal-resize", 3)),
+                Rc::new(TrapMap::new("signal-suspend", 4)),
             ],
             synced_child_processes: Rc::new(RefCell::new(Vec::new())),
             synced_pipes: Rc::new(RefCell::new(Vec::new())),
@@ -252,42 +252,39 @@ impl Interpreter {
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
-        let sig_str = match sig {
-            Signal::Continue => "signal-continue",
-            Signal::Interrupt => "signal-interrupt",
-            Signal::Resize => "signal-resize",
-            Signal::Suspend => "signal-suspend",
-            Signal::Quit => "signal-quit",
-            _ => unreachable!()
+        let sig_int: u8 = match sig {
+            Signal::Continue => 0,
+            Signal::Interrupt => 1,
+            Signal::Quit => 2,
+            Signal::Resize => 3,
+            Signal::Suspend => 4,
+            _ => unimplemented!()
         };
 
-        if let Some(sig_value) = self.interp.get_value(sig_str) {
-            let args = vec![sig_value];
+        let args = vec![Value::Integer(Integer::from_u8(sig_int))];
 
-            self.traps.iter()
-                .filter(|t| t.name == sig_str)
-                .take(1)
-                .flat_map(|t| t.get())
-                .map(|t| self.interp.call_value(Value::Lambda(t), args.clone()))
-                .collect()
-        } else {
-            let err = ketos_err(format!("signal object missing: {}", sig_str));
-            vec![Err(err)]
-        }
+        self.traps.iter()
+            .filter(|t| t.index == sig_int)
+            .take(1)
+            .flat_map(|t| t.get())
+            .map(|t| self.interp.call_value(Value::Lambda(t), args.clone()))
+            .collect()
     }
 }
 
 #[derive(ForeignValue, FromValueRef)]
 pub struct TrapMap {
     name: String,
+    index: u8,
     next_key: AtomicUsize,
     traps: RefCell<HashMap<usize, Lambda>>
 }
 
 impl TrapMap {
-    pub fn new<S: Into<String>>(name: S) -> Self {
+    pub fn new<S: Into<String>>(name: S, index: u8) -> Self {
         Self {
             name: name.into(),
+            index,
             next_key: AtomicUsize::new(0),
             traps: RefCell::new(HashMap::new()),
         }
