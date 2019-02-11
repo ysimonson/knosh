@@ -114,8 +114,8 @@ fn run() -> i32 {
         }
     }
 
-    let interp = builder.finish();
-    builtins::inject(interp.scope());
+    let interp = builtins::Interpreter::new(builder.finish());
+    interp.add_builtins();
 
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
@@ -124,7 +124,7 @@ fn run() -> i32 {
             return 1;
         }
     } else if !opts.free.is_empty() {
-        interp.set_args(&opts.free);
+        interp.interp.set_args(&opts.free);
 
         if !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
             return 1;
@@ -188,15 +188,15 @@ fn parse_param<T: FromStr>(name: &str, value: &str) -> Result<T, String> {
         .map_err(|_| format!("invalid `{}` value: {}", name, value))
 }
 
-fn display_error(interp: &Interpreter, e: &Error) {
-    if let Some(trace) = interp.take_traceback() {
-        interp.display_trace(&trace);
+fn display_error(interp: &builtins::Interpreter, e: &Error) {
+    if let Some(trace) = interp.interp.take_traceback() {
+        interp.interp.display_trace(&trace);
     }
-    interp.display_error(e);
+    interp.interp.display_error(e);
 }
 
-fn execute_exprs(interp: &Interpreter, exprs: &str, path: Option<String>) -> Result<Value, Error> {
-    let mut values = interp.parse_exprs(exprs, path)?;
+fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Value, Error> {
+    let mut values = interp.interp.parse_exprs(exprs, path)?;
 
     // Automatically insert parens if they're not explicitly put
     let value = if values.len() > 1 {
@@ -206,19 +206,19 @@ fn execute_exprs(interp: &Interpreter, exprs: &str, path: Option<String>) -> Res
     };
 
     let value = patch_spawns(interp, value, false, false);
-    let code = compile(interp.context(), &value)?;
-    interp.execute_code(Rc::new(code))
+    let code = compile(interp.interp.context(), &value)?;
+    interp.interp.execute_code(Rc::new(code))
 }
 
-fn patch_spawns(interp: &Interpreter, value: Value, pipe_stdin: bool, pipe_stdout: bool) -> Value {
+fn patch_spawns(interp: &builtins::Interpreter, value: Value, pipe_stdin: bool, pipe_stdout: bool) -> Value {
     if let Value::List(list) = value {
         // list is never empty according to ketos docs
         debug_assert!(!list.is_empty());
 
         if let Some(Value::Name(ref first_name)) = list.first() {
-            let scope = interp.scope();
+            let scope = interp.interp.scope();
 
-            if first_name == &builtins::PIPE_NAME.with(|pn| pn.borrow().unwrap()) {
+            if interp.is_pipe_operator(first_name) {
                 // Looks like this expr is a call to pipe
 
                 let mut new_list = vec![Value::Name(*first_name)];
@@ -288,51 +288,17 @@ fn patch_spawns(interp: &Interpreter, value: Value, pipe_stdin: bool, pipe_stdou
     value
 }
 
-fn run_exprs(interp: &Interpreter, exprs: &str, path: Option<String>) -> bool {
+fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
     match execute_exprs(interp, exprs, path) {
         Ok(value) => {
             let mut has_child_error = false;
 
-            builtins::SYNCED_CHILD_PROCESSES.with(|scp| {
-                let mut child_processes = scp.borrow_mut();
+            for err in interp.wait_synced() {
+                display_error(&interp, &err);
+                has_child_error = true;
+            }
 
-                for cp in child_processes.drain(..) {
-                    match cp.wait() {
-                        Ok(ref status) if !status.success() => {
-                            let err = ketos_err(format!("non-successful status code: {:?}", status));
-                            display_error(&interp, &err);
-                            has_child_error = true;
-                        }
-                        Err(err) => {
-                            display_error(&interp, &err);
-                            has_child_error = true;
-                        }
-                        Ok(_) => ()
-                    }
-                }
-            });
-
-            builtins::SYNCED_PIPES.with(|sp| {
-                let mut pipes = sp.borrow_mut();
-
-                for cp in pipes.drain(..) {
-                    match cp.join() {
-                        Ok(Err(err)) => {
-                            let err = ketos_err(format!("pipe failed: {}", err));
-                            display_error(&interp, &err);
-                            has_child_error = true;
-                        },
-                        Err(err) => {
-                            let err = ketos_err(format!("pipe thread panic: {:?}", err));
-                            display_error(&interp, &err);
-                            has_child_error = true;
-                        },
-                        Ok(_) => ()
-                    }
-                }
-            });
-
-            interp.display_value(&value);
+            interp.interp.display_value(&value);
             has_child_error
         },
         Err(err) => {
@@ -345,7 +311,7 @@ fn run_exprs(interp: &Interpreter, exprs: &str, path: Option<String>) -> bool {
 /// Executes a ketos file. This does not use ketos' built-in `run_file`
 /// because we do some pre-processing before shipping it off to the
 /// interpreter.
-fn run_file(interp: &Interpreter, path: &Path) -> bool {
+fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
     let path_str = path.to_str().map(|s| s.to_string());
 
     let file = match File::open(path) {
@@ -389,11 +355,11 @@ fn run_file(interp: &Interpreter, path: &Path) -> bool {
     }
 }
 
-fn run_repl(interp: &Interpreter) -> io::Result<()> {
+fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
 
     CONTEXT.with(|key| {
-        *key.borrow_mut() = Some(interp.context().clone());
+        *key.borrow_mut() = Some(interp.interp.context().clone());
     });
 
     interface.set_completer(Arc::new(KnoshCompleter));
@@ -427,37 +393,14 @@ fn run_repl(interp: &Interpreter) -> io::Result<()> {
                 interface.add_history(line.clone());
                 line.push('\n');
                 run_exprs(interp, &line, None);
-                interp.clear_codemap();
+                interp.interp.clear_codemap();
             }
             ReadResult::Signal(sig) => {
-                let sig_str = match sig {
-                    Signal::Continue => "signal-continue",
-                    Signal::Interrupt => "signal-interrupt",
-                    Signal::Resize => "signal-resize",
-                    Signal::Suspend => "signal-suspend",
-                    Signal::Quit => "signal-quit",
-                    _ => unreachable!()
-                };
-
-                if let Some(sig_value) = interp.get_value(sig_str) {
-                    builtins::TRAPS.with(|traps| {
-                        let traps = traps.iter()
-                            .filter(|t| t.name == sig_str)
-                            .take(1)
-                            .flat_map(|t| t.get());
-
-                        let args = vec![sig_value];
-
-                        for trap in traps {
-                            match interp.call_value(Value::Lambda(trap), args.clone()) {
-                                Ok(value) => interp.display_value(&value),
-                                Err(err) => display_error(&interp, &err),
-                            }
-                        }
-                    });
-                } else {
-                    let err = ketos_err(format!("signal object missing: {}", sig_str));
-                    display_error(&interp, &err);
+                for result in interp.trigger_signal(sig) {
+                    match result {
+                        Ok(value) => interp.interp.display_value(&value),
+                        Err(err) => display_error(&interp, &err),
+                    }
                 }
 
                 if sig == Signal::Interrupt {

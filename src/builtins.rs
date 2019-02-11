@@ -16,27 +16,265 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
-use ketos::{Error, GlobalScope, Integer, Name, Value};
+use ketos::{Builder, Error, GlobalScope, Integer, Name, Value, Interpreter as KetosInterpreter};
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
+use linefeed::Signal;
 
-use crate::util;
 use crate::error::ketos_err;
+use crate::util;
 
-thread_local! {
-    pub static PIPE_NAME: RefCell<Option<Name>> = RefCell::new(None);
+pub struct Interpreter {
+    pub interp: KetosInterpreter,
+    pipe_operator_name: Name,
+    traps: [Rc<TrapMap>; 5],
+    synced_child_processes: Rc<RefCell<Vec<ChildProcess>>>,
+    synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>
+}
 
-    pub static TRAPS: [Rc<TrapMap>; 5] = [
-        Rc::new(TrapMap::new("signal-interrupt")),
-        Rc::new(TrapMap::new("signal-continue")),
-        Rc::new(TrapMap::new("signal-resize")),
-        Rc::new(TrapMap::new("signal-suspend")),
-        Rc::new(TrapMap::new("signal-quit")),
-    ];
+impl Interpreter {
+    pub fn new(interp: KetosInterpreter) -> Self {
+        let scope = interp.scope();
+        let pipe_operator_name = scope.borrow_names_mut().add("|");
 
-    pub static SYNCED_CHILD_PROCESSES: RefCell<Vec<ChildProcess>> = RefCell::new(Vec::new());
-    pub static SYNCED_PIPES: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>> = RefCell::new(Vec::new());
+        Self {
+            interp,
+            pipe_operator_name,
+            traps: [
+                Rc::new(TrapMap::new("signal-interrupt")),
+                Rc::new(TrapMap::new("signal-continue")),
+                Rc::new(TrapMap::new("signal-resize")),
+                Rc::new(TrapMap::new("signal-suspend")),
+                Rc::new(TrapMap::new("signal-quit")),
+            ],
+            synced_child_processes: Rc::new(RefCell::new(Vec::new())),
+            synced_pipes: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    pub fn add_builtins(&self) {
+        let scope = self.interp.scope();
+        let synced_child_processes = self.synced_child_processes.clone();
+        let synced_pipes = self.synced_pipes.clone();
+
+        for trap in self.traps.iter() {
+            scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
+        }
+
+        scope.add_named_value("io-inherit", Value::Integer(Integer::from_u8(0)));
+        scope.add_named_value("io-piped", Value::Integer(Integer::from_u8(1)));
+        scope.add_named_value("io-null", Value::Integer(Integer::from_u8(2)));
+
+        ketos_closure!(scope, "trap", |traps: &TrapMap, callback: &Lambda| -> usize {
+            traps.add(callback)
+        });
+
+        ketos_closure!(scope, "untrap", |traps: &TrapMap, key: usize| -> bool {
+            traps.remove(key)
+        });
+
+        ketos_closure!(scope, "pid", || -> u32 {
+            Ok(process::id())
+        });
+        
+        ketos_closure!(scope, "setenv", |key: &str, value: &str| -> () {
+            env::set_var(key, value);
+            Ok(())
+        });
+
+        ketos_closure!(scope, "env", |key: &str| -> OsString {
+            Ok(env::var_os(key).unwrap_or_else(OsString::default))
+        });
+
+        ketos_closure!(scope, "delenv", |key: &str| -> () {
+            env::remove_var(key);
+            Ok(())
+        });
+
+        ketos_closure!(scope, "exit", |code: i32| -> () {
+            process::exit(code);
+        });
+
+        ketos_closure!(scope, "cd", |dir: &str| -> OsString {
+            let expanded = util::expand_path(dir)?;
+            env::set_current_dir(expanded.clone()).map_err(|err| ketos_err(format!("{}: {}", dir, err)))?;
+            Ok(expanded.into_os_string())
+        });
+
+        ketos_closure!(scope, "pwd", || -> OsString {
+            let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
+            Ok(path.into_os_string())
+        });
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "exec", |name: &OsStr, args: &[Value]| -> () {
+            let args_str = util::values_to_osstrings(args)?;
+            let err = process::Command::new(name).args(args_str).exec();
+            Err(ketos_err(format!("{}", err)))
+        });
+
+        scope.add_value_with_name("spawn-async", |name| Value::new_foreign_fn(name, move |_, args| {
+            let p = spawn(name, args, true)?;
+            Ok(p.into())
+        }));
+
+        scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
+            let p = spawn(name, args, false)?;
+            let pid = p.pid();
+            let mut synced_child_processes = synced_child_processes.borrow_mut();
+            synced_child_processes.push(p);
+            Ok(pid.into())
+        }));
+
+        ketos_closure!(scope, "child-wait", |child: &ChildProcess| -> ChildExitStatus {
+            child.wait()
+        });
+
+        ketos_closure!(scope, "child-poll", |child: &ChildProcess| -> ChildExitStatus {
+            child.poll()
+        });
+
+        ketos_closure!(scope, "child-pid", |child: &ChildProcess| -> u32 {
+            Ok(child.pid())
+        });
+
+        ketos_closure!(scope, "child-write", |child: &ChildProcess, bytes: &[u8]| -> () {
+            child.write(bytes)
+        });
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "child-stdin-fd", |child: &ChildProcess| -> i32 {
+            Ok(child.stdin_fd())
+        });
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "child-stdout-fd", |child: &ChildProcess| -> i32 {
+            Ok(child.stdout_fd())
+        });
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "child-stderr-fd", |child: &ChildProcess| -> i32 {
+            Ok(child.stderr_fd())
+        });
+
+        ketos_closure!(scope, "child-exit-success", |status: &ChildExitStatus| -> bool {
+            Ok(status.success())
+        });
+
+        ketos_closure!(scope, "child-exit-code", |status: &ChildExitStatus| -> i32 {
+            status.code()
+        });
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "child-exit-signal", |status: &ChildExitStatus| -> i32 {
+            status.signal()
+        });
+
+        let pipe_name = scope.borrow_names_mut().add("|");
+        scope.add_value(pipe_name, Value::new_foreign_fn(pipe_name, move |_, args| {
+            check_arity(Arity::Min(2), args.len(), pipe_name)?;
+
+            let procs: Result<Vec<&ChildProcess>, ExecError> = args.into_iter()
+                .map(|arg| {
+                    <&ChildProcess>::from_value_ref(arg)
+                })
+                .collect();
+
+            let procs = procs?;
+            let mut synced_pipes = synced_pipes.borrow_mut();
+
+            for i in 1..procs.len() {
+                let src = &procs[i - 1];
+                let dest = &procs[i];
+                let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
+                let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
+
+                synced_pipes.push(thread::spawn(move || {
+                    // TODO: handle cases where broken pipes should throw an error
+                    match io::copy(&mut stdout, &mut stdin) {
+                        Ok(_) => Ok(()),
+                        Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+                        Err(err) => Err(err)
+                    }
+                }));
+            }
+
+            Ok(().into())
+        }));
+    }
+
+    pub fn wait_synced(&self) -> Vec<Error> {
+        let mut errors = Vec::new();
+
+        {
+            let synced_child_processes = self.synced_child_processes.clone();
+            let mut synced_child_processes = synced_child_processes.borrow_mut();
+
+            for child_process in synced_child_processes.drain(..) {
+                match child_process.wait() {
+                    Ok(ref status) if !status.success() => {
+                        let err = ketos_err(format!("non-successful status code: {:?}", status));
+                        errors.push(err);
+                    }
+                    Err(err) => {
+                        errors.push(err);
+                    }
+                    Ok(_) => ()
+                }
+            }
+        }
+
+        {
+            let synced_pipes = self.synced_pipes.clone();
+            let mut synced_pipes = synced_pipes.borrow_mut();
+
+            for synced_pipe in synced_pipes.drain(..) {
+                match synced_pipe.join() {
+                    Ok(Err(err)) => {
+                        let err = ketos_err(format!("pipe failed: {}", err));
+                        errors.push(err);
+                    },
+                    Err(err) => {
+                        let err = ketos_err(format!("pipe thread panic: {:?}", err));
+                        errors.push(err);
+                    },
+                    Ok(_) => ()
+                }
+            }
+        }
+
+        errors
+    }
+
+    pub fn is_pipe_operator(&self, name: &Name) -> bool {
+        name == &self.pipe_operator_name
+    }
+
+    pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
+        let sig_str = match sig {
+            Signal::Continue => "signal-continue",
+            Signal::Interrupt => "signal-interrupt",
+            Signal::Resize => "signal-resize",
+            Signal::Suspend => "signal-suspend",
+            Signal::Quit => "signal-quit",
+            _ => unreachable!()
+        };
+
+        if let Some(sig_value) = self.interp.get_value(sig_str) {
+            let args = vec![sig_value];
+
+            self.traps.iter()
+                .filter(|t| t.name == sig_str)
+                .take(1)
+                .flat_map(|t| t.get())
+                .map(|t| self.interp.call_value(Value::Lambda(t), args.clone()))
+                .collect()
+        } else {
+            let err = ketos_err(format!("signal object missing: {}", sig_str));
+            vec![Err(err)]
+        }
+    }
 }
 
 #[derive(ForeignValue, FromValueRef)]
@@ -166,167 +404,6 @@ impl ChildExitStatus {
     pub fn signal(&self) -> Result<i32, Error> {
         self.0.signal().ok_or_else(|| ketos_err("no exit signal"))
     }
-}
-
-pub fn inject(scope: &Rc<GlobalScope>) {
-    TRAPS.with(|traps| {
-        for trap in traps.iter() {
-            scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
-        }
-    });
-
-    scope.add_named_value("io-inherit", Value::Integer(Integer::from_u8(0)));
-    scope.add_named_value("io-piped", Value::Integer(Integer::from_u8(1)));
-    scope.add_named_value("io-null", Value::Integer(Integer::from_u8(2)));
-
-    ketos_closure!(scope, "trap", |traps: &TrapMap, callback: &Lambda| -> usize {
-        traps.add(callback)
-    });
-
-    ketos_closure!(scope, "untrap", |traps: &TrapMap, key: usize| -> bool {
-        traps.remove(key)
-    });
-
-    ketos_closure!(scope, "pid", || -> u32 {
-        Ok(process::id())
-    });
-    
-    ketos_closure!(scope, "setenv", |key: &str, value: &str| -> () {
-        env::set_var(key, value);
-        Ok(())
-    });
-
-    ketos_closure!(scope, "env", |key: &str| -> OsString {
-        Ok(env::var_os(key).unwrap_or_else(OsString::default))
-    });
-
-    ketos_closure!(scope, "delenv", |key: &str| -> () {
-        env::remove_var(key);
-        Ok(())
-    });
-
-    ketos_closure!(scope, "exit", |code: i32| -> () {
-        process::exit(code);
-    });
-
-    ketos_closure!(scope, "cd", |dir: &str| -> OsString {
-        let expanded = util::expand_path(dir)?;
-        env::set_current_dir(expanded.clone()).map_err(|err| ketos_err(format!("{}: {}", dir, err)))?;
-        Ok(expanded.into_os_string())
-    });
-
-    ketos_closure!(scope, "pwd", || -> OsString {
-        let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
-        Ok(path.into_os_string())
-    });
-
-    #[cfg(unix)]
-    ketos_closure!(scope, "exec", |name: &OsStr, args: &[Value]| -> () {
-        let args_str = util::values_to_osstrings(args)?;
-        let err = process::Command::new(name).args(args_str).exec();
-        Err(ketos_err(format!("{}", err)))
-    });
-
-    scope.add_value_with_name("spawn-async", |name| Value::new_foreign_fn(name, move |_, args| {
-        let p = spawn(name, args, true)?;
-        Ok(p.into())
-    }));
-
-    scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
-        let p = spawn(name, args, false)?;
-        let pid = p.pid();
-
-        SYNCED_CHILD_PROCESSES.with(|scp| {
-            let mut child_processes = scp.borrow_mut();
-            child_processes.push(p);
-        });
-
-        Ok(pid.into())
-    }));
-
-    ketos_closure!(scope, "child-wait", |child: &ChildProcess| -> ChildExitStatus {
-        child.wait()
-    });
-
-    ketos_closure!(scope, "child-poll", |child: &ChildProcess| -> ChildExitStatus {
-        child.poll()
-    });
-
-    ketos_closure!(scope, "child-pid", |child: &ChildProcess| -> u32 {
-        Ok(child.pid())
-    });
-
-    ketos_closure!(scope, "child-write", |child: &ChildProcess, bytes: &[u8]| -> () {
-        child.write(bytes)
-    });
-
-    #[cfg(unix)]
-    ketos_closure!(scope, "child-stdin-fd", |child: &ChildProcess| -> i32 {
-        Ok(child.stdin_fd())
-    });
-
-    #[cfg(unix)]
-    ketos_closure!(scope, "child-stdout-fd", |child: &ChildProcess| -> i32 {
-        Ok(child.stdout_fd())
-    });
-
-    #[cfg(unix)]
-    ketos_closure!(scope, "child-stderr-fd", |child: &ChildProcess| -> i32 {
-        Ok(child.stderr_fd())
-    });
-
-    ketos_closure!(scope, "child-exit-success", |status: &ChildExitStatus| -> bool {
-        Ok(status.success())
-    });
-
-    ketos_closure!(scope, "child-exit-code", |status: &ChildExitStatus| -> i32 {
-        status.code()
-    });
-
-    #[cfg(unix)]
-    ketos_closure!(scope, "child-exit-signal", |status: &ChildExitStatus| -> i32 {
-        status.signal()
-    });
-
-    let pipe_name = scope.borrow_names_mut().add("|");
-    scope.add_value(pipe_name, Value::new_foreign_fn(pipe_name, move |_, args| {
-        check_arity(Arity::Min(2), args.len(), pipe_name)?;
-
-        let procs: Result<Vec<&ChildProcess>, ExecError> = args.into_iter()
-            .map(|arg| {
-                <&ChildProcess>::from_value_ref(arg)
-            })
-            .collect();
-
-        let procs = procs?;
-
-        SYNCED_PIPES.with(|sp| {
-            let mut pipes = sp.borrow_mut();
-
-            for i in 1..procs.len() {
-                let src = &procs[i - 1];
-                let dest = &procs[i];
-                let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
-                let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
-
-                pipes.push(thread::spawn(move || {
-                    // TODO: handle cases where broken pipes should throw an error
-                    match io::copy(&mut stdout, &mut stdin) {
-                        Ok(_) => Ok(()),
-                        Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-                        Err(err) => Err(err)
-                    }
-                }));
-            }
-        });
-
-        Ok(().into())
-    }));
-
-    PIPE_NAME.with(|pn| {
-        let mut name = pn.borrow_mut();
-        name.replace(pipe_name);
-    });
 }
 
 fn spawn(name: Name, args: &mut [Value], is_async: bool) -> Result<ChildProcess, Error> {
