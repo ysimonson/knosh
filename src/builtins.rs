@@ -16,7 +16,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
-use ketos::{Builder, Error, GlobalScope, Integer, Name, Value, Interpreter as KetosInterpreter};
+use ketos::{Error, Integer, Name, Value, Interpreter as KetosInterpreter};
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
@@ -279,7 +279,7 @@ impl Interpreter {
 
 #[derive(ForeignValue, FromValueRef)]
 pub struct TrapMap {
-    pub name: String,
+    name: String,
     next_key: AtomicUsize,
     traps: RefCell<HashMap<usize, Lambda>>
 }

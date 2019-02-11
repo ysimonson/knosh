@@ -36,8 +36,6 @@ use linefeed::{
     Signal, Suffix, Terminal,
 };
 
-use crate::error::ketos_err;
-
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 
 fn main() {
