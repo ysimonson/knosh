@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::rc::Rc;
 use std::env;
 use std::fmt;
@@ -22,41 +23,52 @@ use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
 use linefeed::Signal;
 
-use crate::error::ketos_err;
+use crate::error::{ketos_err, SimpleError};
 use crate::util;
 
 pub struct Interpreter {
-    pub interp: KetosInterpreter,
+    pub interp: Rc<KetosInterpreter>,
     pipe_operator_name: Name,
     traps: [Rc<TrapMap>; 5],
     synced_child_processes: Rc<RefCell<Vec<ChildProcess>>>,
-    synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>
+    synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>,
+    is_root: bool,
+    next_child_interp_key: Rc<RefCell<usize>>,
+    child_interps: Rc<RefCell<HashMap<usize, thread::JoinHandle<Result<(), SimpleError>>>>>,
 }
 
 impl Interpreter {
-    pub fn new(interp: KetosInterpreter) -> Self {
+    pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
         let scope = interp.scope();
         let pipe_operator_name = scope.borrow_names_mut().add("|");
+        let traps = [
+            Rc::new(TrapMap::new("signal-continue", 0)),
+            Rc::new(TrapMap::new("signal-interrupt", 1)),
+            Rc::new(TrapMap::new("signal-quit", 2)),
+            Rc::new(TrapMap::new("signal-resize", 3)),
+            Rc::new(TrapMap::new("signal-suspend", 4)),
+        ];
 
         Self {
-            interp,
+            interp: Rc::new(interp),
             pipe_operator_name,
-            traps: [
-                Rc::new(TrapMap::new("signal-continue", 0)),
-                Rc::new(TrapMap::new("signal-interrupt", 1)),
-                Rc::new(TrapMap::new("signal-quit", 2)),
-                Rc::new(TrapMap::new("signal-resize", 3)),
-                Rc::new(TrapMap::new("signal-suspend", 4)),
-            ],
+            traps,
             synced_child_processes: Rc::new(RefCell::new(Vec::new())),
             synced_pipes: Rc::new(RefCell::new(Vec::new())),
+            is_root,
+            next_child_interp_key: Rc::new(RefCell::new(0)),
+            child_interps: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
     pub fn add_builtins(&self) {
-        let scope = self.interp.scope();
+        let interp1 = self.interp.clone();
+        let interp2 = self.interp.clone();
+        let scope = interp1.scope();
         let synced_child_processes = self.synced_child_processes.clone();
         let synced_pipes = self.synced_pipes.clone();
+        let next_child_interp_key =self.next_child_interp_key.clone();
+        let child_interps = self.child_interps.clone();
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -106,6 +118,56 @@ impl Interpreter {
             let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
             Ok(path.into_os_string())
         });
+
+        ketos_closure!(scope, "pwd", || -> OsString {
+            let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
+            Ok(path.into_os_string())
+        });
+
+        ketos_closure!(scope, "pwd", || -> OsString {
+            let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
+            Ok(path.into_os_string())
+        });
+
+        scope.add_value_with_name("go", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Exact(1), args.len(), name)?;
+
+            let mut iter = (&*args).iter();
+            
+            let callback = match iter.next() {
+                Some(Value::Name(callback)) => *callback,
+                Some(value) => {
+                    let err = ExecError::TypeError {
+                        expected: "name",
+                        found: value.type_name(),
+                        value: None,
+                    };
+                    return Err(err.into());
+                },
+                None => unreachable!()
+            };
+
+            let key = {
+                let mut key = next_child_interp_key.borrow_mut();
+                *key += 1;
+                *key
+            };
+
+            let context = interp2.clone().context();
+
+            let handle = thread::spawn(move || {
+                let interp = KetosInterpreter::with_context(context);
+                let interp = Interpreter::new(interp, false);
+                interp.add_builtins();
+                interp.interp.call_value(Value::Name(callback), vec![])
+                    .map_err(|err| SimpleError::new(format!("{}", err)))?;
+                Ok(())
+            });
+
+            let mut child_interps = child_interps.borrow_mut();
+            child_interps.insert(key, handle);
+            Ok(().into())
+        }));
 
         #[cfg(unix)]
         ketos_closure!(scope, "exec", |name: &OsStr, args: &[Value]| -> () {
@@ -191,7 +253,6 @@ impl Interpreter {
                 let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
 
                 synced_pipes.push(thread::spawn(move || {
-                    // TODO: handle cases where broken pipes should throw an error
                     match io::copy(&mut stdout, &mut stdin) {
                         Ok(_) => Ok(()),
                         Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
@@ -252,6 +313,10 @@ impl Interpreter {
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
+        if !self.is_root {
+            panic!("Signals can only be triggered on the root interpreter");
+        }
+
         let sig_int: u8 = match sig {
             Signal::Continue => 0,
             Signal::Interrupt => 1,
@@ -262,12 +327,14 @@ impl Interpreter {
         };
 
         let args = vec![Value::Integer(Integer::from_u8(sig_int))];
+        let interp = self.interp.clone();
+        let interp = (*interp).borrow();
 
         self.traps.iter()
             .filter(|t| t.index == sig_int)
             .take(1)
             .flat_map(|t| t.get())
-            .map(|t| self.interp.call_value(Value::Lambda(t), args.clone()))
+            .map(|t| interp.call_value(Value::Lambda(t), args.clone()))
             .collect()
     }
 }

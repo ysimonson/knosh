@@ -20,17 +20,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::fs::File;
 use std::rc::Rc;
-use ketos::name::standard_names::LIST;
 
 use gumdrop::{Options, ParsingStyle};
 use ketos::{
-    complete_name, Builder, Context, Error, Integer, Interpreter, ParseError,
+    complete_name, Builder, Context, Error, Interpreter, ParseError,
     ParseErrorKind, RestrictConfig, Value
 };
 use ketos::compile::compile;
 use ketos::io::{IoError, IoMode};
-use ketos::rc_vec::{RcString, RcVec};
-use ketos::name::{is_system_fn, is_system_operator};
+use ketos::rc_vec::RcVec;
 use linefeed::{
     Command, Completer, Completion, Function, Interface, Prompter, ReadResult,
     Signal, Suffix, Terminal,
@@ -112,7 +110,7 @@ fn run() -> i32 {
         }
     }
 
-    let interp = builtins::Interpreter::new(builder.finish());
+    let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
 
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
@@ -122,7 +120,7 @@ fn run() -> i32 {
             return 1;
         }
     } else if !opts.free.is_empty() {
-        interp.interp.set_args(&opts.free);
+        interp.interp.clone().set_args(&opts.free);
 
         if !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
             return 1;
@@ -187,14 +185,16 @@ fn parse_param<T: FromStr>(name: &str, value: &str) -> Result<T, String> {
 }
 
 fn display_error(interp: &builtins::Interpreter, e: &Error) {
-    if let Some(trace) = interp.interp.take_traceback() {
-        interp.interp.display_trace(&trace);
+    let ketos_interp = interp.interp.clone();
+    if let Some(trace) = ketos_interp.take_traceback() {
+        ketos_interp.display_trace(&trace);
     }
-    interp.interp.display_error(e);
+    ketos_interp.display_error(e);
 }
 
 fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Value, Error> {
-    let mut values = interp.interp.parse_exprs(exprs, path)?;
+    let ketos_interp = interp.interp.clone();
+    let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
     // Automatically insert parens if they're not explicitly put
     let value = if values.len() > 1 {
@@ -203,88 +203,91 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
         values.pop().unwrap()
     };
 
-    let value = patch_spawns(interp, value, false, false);
-    let code = compile(interp.interp.context(), &value)?;
-    interp.interp.execute_code(Rc::new(code))
+    //let value = patch_spawns(interp, value, false, false);
+    //println!("{:#?}", value);
+    let code = compile(ketos_interp.context(), &value)?;
+    ketos_interp.execute_code(Rc::new(code))
 }
 
-fn patch_spawns(interp: &builtins::Interpreter, value: Value, pipe_stdin: bool, pipe_stdout: bool) -> Value {
-    if let Value::List(list) = value {
-        // list is never empty according to ketos docs
-        debug_assert!(!list.is_empty());
+// fn patch_spawns(interp: &builtins::Interpreter, value: Value, pipe_stdin: bool, pipe_stdout: bool) -> Value {
+//     if let Value::List(list) = value {
+//         // list is never empty according to ketos docs
+//         debug_assert!(!list.is_empty());
 
-        if let Some(Value::Name(ref first_name)) = list.first() {
-            let scope = interp.interp.scope();
+//         if let Some(Value::Name(ref first_name)) = list.first() {
+//             let ketos_interp = interp.interp.clone();
+//             let ketos_interp = ketos_interp.borrow();
+//             let scope = ketos_interp.scope();
 
-            if interp.is_pipe_operator(first_name) {
-                // Looks like this expr is a call to pipe
+//             if interp.is_pipe_operator(first_name) {
+//                 // Looks like this expr is a call to pipe
 
-                let mut new_list = vec![Value::Name(*first_name)];
+//                 let mut new_list = vec![Value::Name(*first_name)];
 
-                for (i, value) in list[1..].into_iter().enumerate() {
-                    let is_first = i == 0;
-                    let is_last = i == list.len() - 2;
-                    let new_value = patch_spawns(interp, value.clone(), !is_first, !is_last);
-                    new_list.push(new_value);
-                }
+//                 for (i, value) in list[1..].into_iter().enumerate() {
+//                     let is_first = i == 0;
+//                     let is_last = i == list.len() - 2;
+//                     let new_value = patch_spawns(interp, value.clone(), !is_first, !is_last);
+//                     new_list.push(new_value);
+//                 }
                 
-                return Value::List(RcVec::new(new_list));
-            } else if !is_system_fn(*first_name) && !is_system_operator(*first_name) && !scope.contains_name(*first_name) {
-                // Looks like this expr is shaped like a function call, to a
-                // function that does not exist. Change this into a call to
-                // `spawn`.
+//                 return Value::List(RcVec::new(new_list));
+//             } else if !is_system_fn(*first_name) && !is_system_operator(*first_name) && !scope.contains_name(*first_name) {
+//                 // Looks like this expr is shaped like a function call, to a
+//                 // function that does not exist. Change this into a call to
+//                 // `spawn`.
 
-                let run_name = if pipe_stdout || pipe_stdin {
-                    scope.add_name("spawn-async")
-                } else {
-                    scope.add_name("spawn")
-                };
+//                 let run_name = if pipe_stdout || pipe_stdin {
+//                     scope.add_name("spawn-async")
+//                 } else {
+//                     scope.add_name("spawn")
+//                 };
 
-                let name_store = scope.borrow_names();
+//                 let name_store = scope.borrow_names();
 
-                let mut args = vec![Value::Name(LIST)];
-                for value in &list[1..] {
-                    let new_value = match value {
-                        Value::Name(name) if !is_system_fn(*name) && !is_system_operator(*name) && !scope.contains_name(*name) => {
-                            Value::String(RcString::new(name_store.get(*name).to_string()))
-                        },
-                        _ => patch_spawns(interp, value.clone(), false, false)
-                    };
+//                 let mut args = vec![Value::Name(LIST)];
+//                 for value in &list[1..] {
+//                     let new_value = match value {
+//                         Value::Name(name) if !is_system_fn(*name) && !is_system_operator(*name) && !scope.contains_name(*name) => {
+//                             Value::String(RcString::new(name_store.get(*name).to_string()))
+//                         },
+//                         _ => patch_spawns(interp, value.clone(), false, false)
+//                     };
 
-                    args.push(new_value);
-                }
+//                     args.push(new_value);
+//                 }
 
-                let (stdin, stdout) = match (pipe_stdin, pipe_stdout) {
-                    (true, false) => (1, 0),
-                    (false, true) => (0, 1),
-                    (false, false) => (0, 0),
-                    (true, true) => (1, 1),
-                };
+//                 let (stdin, stdout) = match (pipe_stdin, pipe_stdout) {
+//                     (true, false) => (1, 0),
+//                     (false, true) => (0, 1),
+//                     (false, false) => (0, 0),
+//                     (true, true) => (1, 1),
+//                 };
 
-                return Value::List(RcVec::new(vec![
-                    Value::Name(run_name),
-                    Value::String(RcString::new(name_store.get(*first_name).to_string())),
-                    Value::List(RcVec::new(args)),
-                    Value::Quote(
-                        Box::new(Value::List(RcVec::new(vec![
-                            Value::Integer(Integer::from_u8(stdin)),
-                            Value::Integer(Integer::from_u8(stdout)),
-                            Value::Integer(Integer::from_u8(0)),
-                        ]))),
-                        1,
-                    ),
-                ]));
-            }
-        }
+//                 return Value::List(RcVec::new(vec![
+//                     Value::Name(run_name),
+//                     Value::String(RcString::new(name_store.get(*first_name).to_string())),
+//                     Value::List(RcVec::new(args)),
+//                     Value::Quote(
+//                         Box::new(Value::List(RcVec::new(vec![
+//                             Value::Integer(Integer::from_u8(stdin)),
+//                             Value::Integer(Integer::from_u8(stdout)),
+//                             Value::Integer(Integer::from_u8(0)),
+//                         ]))),
+//                         1,
+//                     ),
+//                 ]));
+//             }
+//         }
 
-        let patched_list = list.into_iter()
-            .map(|value| patch_spawns(interp, value.clone(), false, false))
-            .collect();
-        return Value::List(RcVec::new(patched_list));
-    }
+//         let patched_list = list.into_iter()
+//             .map(|value| patch_spawns(interp, value.clone(), false, false))
+//             .collect();
+//         return Value::List(RcVec::new(patched_list));
+//     }
 
-    value
-}
+//     value
+// }
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
     match execute_exprs(interp, exprs, path) {
@@ -296,7 +299,7 @@ fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) 
                 has_child_error = true;
             }
 
-            interp.interp.display_value(&value);
+            interp.interp.clone().display_value(&value);
             has_child_error
         },
         Err(err) => {
@@ -355,9 +358,10 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
+    let ketos_interp = interp.interp.clone();
 
     CONTEXT.with(|key| {
-        *key.borrow_mut() = Some(interp.interp.context().clone());
+        *key.borrow_mut() = Some(ketos_interp.context().clone());
     });
 
     interface.set_completer(Arc::new(KnoshCompleter));
@@ -391,12 +395,12 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
                 interface.add_history(line.clone());
                 line.push('\n');
                 run_exprs(interp, &line, None);
-                interp.interp.clear_codemap();
+                ketos_interp.clear_codemap();
             }
             ReadResult::Signal(sig) => {
                 for result in interp.trigger_signal(sig) {
                     match result {
-                        Ok(value) => interp.interp.display_value(&value),
+                        Ok(value) => ketos_interp.display_value(&value),
                         Err(err) => display_error(&interp, &err),
                     }
                 }
