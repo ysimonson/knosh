@@ -23,6 +23,11 @@ use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
 use linefeed::Signal;
 
+#[cfg(unix)]
+use nix::unistd::{fork, ForkResult, Pid as NixPid};
+#[cfg(unix)]
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+
 use crate::error::{ketos_err, SimpleError};
 use crate::util;
 
@@ -33,8 +38,6 @@ pub struct Interpreter {
     synced_child_processes: Rc<RefCell<Vec<ChildProcess>>>,
     synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>,
     is_root: bool,
-    next_child_interp_key: Rc<RefCell<usize>>,
-    child_interps: Rc<RefCell<HashMap<usize, thread::JoinHandle<Result<(), SimpleError>>>>>,
 }
 
 impl Interpreter {
@@ -56,8 +59,6 @@ impl Interpreter {
             synced_child_processes: Rc::new(RefCell::new(Vec::new())),
             synced_pipes: Rc::new(RefCell::new(Vec::new())),
             is_root,
-            next_child_interp_key: Rc::new(RefCell::new(0)),
-            child_interps: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -67,8 +68,6 @@ impl Interpreter {
         let scope = interp1.scope();
         let synced_child_processes = self.synced_child_processes.clone();
         let synced_pipes = self.synced_pipes.clone();
-        let next_child_interp_key =self.next_child_interp_key.clone();
-        let child_interps = self.child_interps.clone();
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -90,7 +89,7 @@ impl Interpreter {
             Ok(process::id())
         });
         
-        ketos_closure!(scope, "setenv", |key: &str, value: &str| -> () {
+        ketos_closure!(scope, "set-env", |key: &str, value: &str| -> () {
             env::set_var(key, value);
             Ok(())
         });
@@ -99,7 +98,7 @@ impl Interpreter {
             Ok(env::var_os(key).unwrap_or_else(OsString::default))
         });
 
-        ketos_closure!(scope, "delenv", |key: &str| -> () {
+        ketos_closure!(scope, "del-env", |key: &str| -> () {
             env::remove_var(key);
             Ok(())
         });
@@ -119,26 +118,17 @@ impl Interpreter {
             Ok(path.into_os_string())
         });
 
-        ketos_closure!(scope, "pwd", || -> OsString {
-            let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
-            Ok(path.into_os_string())
-        });
-
-        ketos_closure!(scope, "pwd", || -> OsString {
-            let path = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
-            Ok(path.into_os_string())
-        });
-
-        scope.add_value_with_name("go", |name| Value::new_foreign_fn(name, move |_, args| {
+        #[cfg(unix)]
+        scope.add_value_with_name("fork", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Exact(1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
             
             let callback = match iter.next() {
-                Some(Value::Name(callback)) => *callback,
+                Some(Value::Lambda(lambda)) => lambda,
                 Some(value) => {
                     let err = ExecError::TypeError {
-                        expected: "name",
+                        expected: "function",
                         found: value.type_name(),
                         value: None,
                     };
@@ -147,27 +137,27 @@ impl Interpreter {
                 None => unreachable!()
             };
 
-            let key = {
-                let mut key = next_child_interp_key.borrow_mut();
-                *key += 1;
-                *key
-            };
-
-            let context = interp2.clone().context();
-
-            let handle = thread::spawn(move || {
-                let interp = KetosInterpreter::with_context(context);
-                let interp = Interpreter::new(interp, false);
-                interp.add_builtins();
-                interp.interp.call_value(Value::Name(callback), vec![])
-                    .map_err(|err| SimpleError::new(format!("{}", err)))?;
-                Ok(())
-            });
-
-            let mut child_interps = child_interps.borrow_mut();
-            child_interps.insert(key, handle);
-            Ok(().into())
+            match fork() {
+                Ok(ForkResult::Parent { child, .. }) => {
+                    Ok(Pid::new(child).into())
+                },
+                Ok(ForkResult::Child) => {
+                    let lambda = Value::Lambda(callback.clone());
+                    match interp2.call_value(lambda, vec![]) {
+                        Ok(_) => process::exit(0),
+                        Err(_) => process::exit(1),
+                    }
+                },
+                Err(err) => {
+                    Err(ketos_err(format!("could not fork: {}", err)))
+                }
+            }
         }));
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "wait", |pid: &Pid| -> () {
+            pid.wait()
+        });
 
         #[cfg(unix)]
         ketos_closure!(scope, "exec", |name: &OsStr, args: &[Value]| -> () {
@@ -467,6 +457,29 @@ impl ChildExitStatus {
     #[cfg(unix)]
     pub fn signal(&self) -> Result<i32, Error> {
         self.0.signal().ok_or_else(|| ketos_err("no exit signal"))
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
+pub struct Pid(pub NixPid);
+
+impl Pid {
+    pub fn new(pid: NixPid) -> Self {
+        Self { 0: pid }
+    }
+
+    pub fn wait(&self) -> Result<(), Error> {
+        // Ideally we'd call `waitpid` once, but `nix` as of 0.13.0 doesn't
+        // support `WIFSIGNALED`
+        loop {
+            match waitpid(Some(self.0), None) {
+                Ok(WaitStatus::Exited(_, code)) if code == 0 => return Ok(()),
+                Ok(WaitStatus::Signaled(_, _, _)) => return Ok(()),
+                Ok(_) => (),
+                Err(err) => return Err(ketos_err(format!("could not wait for child interpreter: {}", err))),
+            }
+        }
     }
 }
 

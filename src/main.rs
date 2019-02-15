@@ -5,6 +5,8 @@ extern crate ketos;
 #[macro_use]
 extern crate ketos_derive;
 extern crate linefeed;
+#[cfg(unix)]
+extern crate nix;
 
 mod builtins;
 mod error;

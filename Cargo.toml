@@ -9,6 +9,7 @@ dirs = "1.0"
 gumdrop = "0.5"
 ketos_derive = "0.10.0"
 linefeed = "0.5.3"
+nix = "0.13.0"
 
 [dependencies.ketos]
 git = "https://github.com/ysimonson/ketos"
