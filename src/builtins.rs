@@ -329,7 +329,7 @@ pub struct TrapMap {
 }
 
 impl TrapMap {
-    pub fn new<S: Into<String>>(name: S, index: u8) -> Self {
+    fn new<S: Into<String>>(name: S, index: u8) -> Self {
         Self {
             name: name.into(),
             index,
@@ -338,7 +338,7 @@ impl TrapMap {
         }
     }
 
-    pub fn add(&self, callback: &Lambda) -> Result<usize, Error> {
+    fn add(&self, callback: &Lambda) -> Result<usize, Error> {
         let key = self.next_key.fetch_add(1, Ordering::Relaxed);
         if key == usize::max_value() {
             return Err(ketos_err("out of trap keys"));
@@ -348,11 +348,11 @@ impl TrapMap {
         Ok(key)
     }
 
-    pub fn remove(&self, key: usize) -> Result<bool, Error> {
+    fn remove(&self, key: usize) -> Result<bool, Error> {
         Ok(self.traps.borrow_mut().remove(&key).is_some())
     }
 
-    pub fn get(&self) -> Vec<Lambda> {
+    fn get(&self) -> Vec<Lambda> {
         // Note: interpreters consume lambdas when they're called. We need to
         // clone the lambda at some point, so might as well do it here so we
         // can avoid the borrow checker a bit more.
@@ -370,7 +370,7 @@ impl fmt::Debug for TrapMap {
 pub struct ChildProcess(RefCell<process::Child>);
 
 impl ChildProcess {
-    pub fn new<I, S>(name: &OsStr, args: I, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<Self, Error>
+    fn new<I, S>(name: &OsStr, args: I, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<Self, Error>
     where I: IntoIterator<Item=S>,
           S: AsRef<OsStr>
     {
@@ -385,14 +385,14 @@ impl ChildProcess {
         Ok(Self { 0: RefCell::new(child) })
     }
 
-    pub fn wait(&self) -> Result<ChildExitStatus, Error> {
+    fn wait(&self) -> Result<ChildExitStatus, Error> {
         match self.0.borrow_mut().wait() {
             Ok(status) => Ok(ChildExitStatus::new(status)),
             Err(err) => Err(ketos_err(format!("could not wait for child: {}", err)))
         }
     }
 
-    pub fn poll(&self) -> Result<ChildExitStatus, Error> {
+    fn poll(&self) -> Result<ChildExitStatus, Error> {
         match self.0.borrow_mut().try_wait() {
             Ok(Some(status)) => Ok(ChildExitStatus::new(status)),
             Ok(None) => Err(ketos_err("child not finished")),
@@ -400,30 +400,30 @@ impl ChildProcess {
         }
     }
 
-    pub fn pid(&self) -> u32 {
+    fn pid(&self) -> u32 {
         self.0.borrow().id()
     }
 
-    pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
+    fn write(&self, bytes: &[u8]) -> Result<(), Error> {
         let mut child = self.0.borrow_mut();
         let stdin = child.stdin.as_mut().expect("failed to get child stdin");
         stdin.write_all(bytes).map_err(|err| ketos_err(format!("could not write to child: {}", err)))
     }
 
     #[cfg(unix)]
-    pub fn stdin_fd(&self) -> i32 {
+    fn stdin_fd(&self) -> i32 {
         let child = self.0.borrow();
         child.stdin.as_ref().expect("failed to get child stdin").as_raw_fd()
     }
 
     #[cfg(unix)]
-    pub fn stdout_fd(&self) -> i32 {
+    fn stdout_fd(&self) -> i32 {
         let child = self.0.borrow();
         child.stdout.as_ref().expect("failed to get child stdout").as_raw_fd()
     }
 
     #[cfg(unix)]
-    pub fn stderr_fd(&self) -> i32 {
+    fn stderr_fd(&self) -> i32 {
         let child = self.0.borrow();
         child.stderr.as_ref().expect("failed to get child stderr").as_raw_fd()
     }
@@ -433,20 +433,20 @@ impl ChildProcess {
 pub struct ChildExitStatus(pub process::ExitStatus);
 
 impl ChildExitStatus {
-    pub fn new(status: process::ExitStatus) -> Self {
+    fn new(status: process::ExitStatus) -> Self {
         Self { 0: status }
     }
 
-    pub fn success(&self) -> bool {
+    fn success(&self) -> bool {
         self.0.success()
     }
 
-    pub fn code(&self) -> Result<i32, Error> {
+    fn code(&self) -> Result<i32, Error> {
         self.0.code().ok_or_else(|| ketos_err("no exit code"))
     }
 
     #[cfg(unix)]
-    pub fn signal(&self) -> Result<i32, Error> {
+    fn signal(&self) -> Result<i32, Error> {
         self.0.signal().ok_or_else(|| ketos_err("no exit signal"))
     }
 }
@@ -456,11 +456,11 @@ impl ChildExitStatus {
 pub struct Pid(pub NixPid);
 
 impl Pid {
-    pub fn new(pid: NixPid) -> Self {
+    fn new(pid: NixPid) -> Self {
         Self { 0: pid }
     }
 
-    pub fn wait(&self) -> Result<(), Error> {
+    fn wait(&self) -> Result<(), Error> {
         // Ideally we'd call `waitpid` once, but `nix` as of 0.13.0 doesn't
         // support `WIFSIGNALED`
         loop {
