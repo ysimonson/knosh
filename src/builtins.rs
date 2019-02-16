@@ -26,14 +26,13 @@ use linefeed::Signal;
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult, Pid as NixPid};
 #[cfg(unix)]
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::sys::wait::{waitpid, WaitStatus};
 
-use crate::error::{ketos_err, SimpleError};
+use crate::error::ketos_err;
 use crate::util;
 
 pub struct Interpreter {
     pub interp: Rc<KetosInterpreter>,
-    pipe_operator_name: Name,
     traps: [Rc<TrapMap>; 5],
     synced_child_processes: Rc<RefCell<Vec<ChildProcess>>>,
     synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>,
@@ -42,8 +41,6 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
-        let scope = interp.scope();
-        let pipe_operator_name = scope.borrow_names_mut().add("|");
         let traps = [
             Rc::new(TrapMap::new("signal-continue", 0)),
             Rc::new(TrapMap::new("signal-interrupt", 1)),
@@ -54,7 +51,6 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
-            pipe_operator_name,
             traps,
             synced_child_processes: Rc::new(RefCell::new(Vec::new())),
             synced_pipes: Rc::new(RefCell::new(Vec::new())),
@@ -63,9 +59,9 @@ impl Interpreter {
     }
 
     pub fn add_builtins(&self) {
-        let interp1 = self.interp.clone();
-        let interp2 = self.interp.clone();
-        let scope = interp1.scope();
+        let interp_scope = self.interp.clone();
+        let scope = interp_scope.scope();
+        let interp = self.interp.clone();
         let synced_child_processes = self.synced_child_processes.clone();
         let synced_pipes = self.synced_pipes.clone();
 
@@ -143,7 +139,7 @@ impl Interpreter {
                 },
                 Ok(ForkResult::Child) => {
                     let lambda = Value::Lambda(callback.clone());
-                    match interp2.call_value(lambda, vec![]) {
+                    match interp.call_value(lambda, vec![]) {
                         Ok(_) => process::exit(0),
                         Err(_) => process::exit(1),
                     }
@@ -223,9 +219,8 @@ impl Interpreter {
             status.signal()
         });
 
-        let pipe_name = scope.borrow_names_mut().add("|");
-        scope.add_value(pipe_name, Value::new_foreign_fn(pipe_name, move |_, args| {
-            check_arity(Arity::Min(2), args.len(), pipe_name)?;
+        scope.add_value_with_name("|", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Min(2), args.len(), name)?;
 
             let procs: Result<Vec<&ChildProcess>, ExecError> = args.into_iter()
                 .map(|arg| {
@@ -296,10 +291,6 @@ impl Interpreter {
         }
 
         errors
-    }
-
-    pub fn is_pipe_operator(&self, name: &Name) -> bool {
-        name == &self.pipe_operator_name
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {

@@ -205,91 +205,9 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
         values.pop().unwrap()
     };
 
-    //let value = patch_spawns(interp, value, false, false);
-    //println!("{:#?}", value);
     let code = compile(ketos_interp.context(), &value)?;
     ketos_interp.execute_code(Rc::new(code))
 }
-
-// fn patch_spawns(interp: &builtins::Interpreter, value: Value, pipe_stdin: bool, pipe_stdout: bool) -> Value {
-//     if let Value::List(list) = value {
-//         // list is never empty according to ketos docs
-//         debug_assert!(!list.is_empty());
-
-//         if let Some(Value::Name(ref first_name)) = list.first() {
-//             let ketos_interp = interp.interp.clone();
-//             let ketos_interp = ketos_interp.borrow();
-//             let scope = ketos_interp.scope();
-
-//             if interp.is_pipe_operator(first_name) {
-//                 // Looks like this expr is a call to pipe
-
-//                 let mut new_list = vec![Value::Name(*first_name)];
-
-//                 for (i, value) in list[1..].into_iter().enumerate() {
-//                     let is_first = i == 0;
-//                     let is_last = i == list.len() - 2;
-//                     let new_value = patch_spawns(interp, value.clone(), !is_first, !is_last);
-//                     new_list.push(new_value);
-//                 }
-                
-//                 return Value::List(RcVec::new(new_list));
-//             } else if !is_system_fn(*first_name) && !is_system_operator(*first_name) && !scope.contains_name(*first_name) {
-//                 // Looks like this expr is shaped like a function call, to a
-//                 // function that does not exist. Change this into a call to
-//                 // `spawn`.
-
-//                 let run_name = if pipe_stdout || pipe_stdin {
-//                     scope.add_name("spawn-async")
-//                 } else {
-//                     scope.add_name("spawn")
-//                 };
-
-//                 let name_store = scope.borrow_names();
-
-//                 let mut args = vec![Value::Name(LIST)];
-//                 for value in &list[1..] {
-//                     let new_value = match value {
-//                         Value::Name(name) if !is_system_fn(*name) && !is_system_operator(*name) && !scope.contains_name(*name) => {
-//                             Value::String(RcString::new(name_store.get(*name).to_string()))
-//                         },
-//                         _ => patch_spawns(interp, value.clone(), false, false)
-//                     };
-
-//                     args.push(new_value);
-//                 }
-
-//                 let (stdin, stdout) = match (pipe_stdin, pipe_stdout) {
-//                     (true, false) => (1, 0),
-//                     (false, true) => (0, 1),
-//                     (false, false) => (0, 0),
-//                     (true, true) => (1, 1),
-//                 };
-
-//                 return Value::List(RcVec::new(vec![
-//                     Value::Name(run_name),
-//                     Value::String(RcString::new(name_store.get(*first_name).to_string())),
-//                     Value::List(RcVec::new(args)),
-//                     Value::Quote(
-//                         Box::new(Value::List(RcVec::new(vec![
-//                             Value::Integer(Integer::from_u8(stdin)),
-//                             Value::Integer(Integer::from_u8(stdout)),
-//                             Value::Integer(Integer::from_u8(0)),
-//                         ]))),
-//                         1,
-//                     ),
-//                 ]));
-//             }
-//         }
-
-//         let patched_list = list.into_iter()
-//             .map(|value| patch_spawns(interp, value.clone(), false, false))
-//             .collect();
-//         return Value::List(RcVec::new(patched_list));
-//     }
-
-//     value
-// }
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
     match execute_exprs(interp, exprs, path) {
