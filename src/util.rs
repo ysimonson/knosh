@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::process::Stdio;
 
 use dirs;
-use ketos::{Error, Integer, Value};
+use ketos::{Error, Integer};
 
 use crate::error::ketos_err;
 
@@ -59,36 +59,10 @@ pub fn expand_path<S: AsRef<str>>(path: S) -> Result<PathBuf, Error> {
     Ok(path_buf)
 }
 
-pub fn values_to_osstrings(values: &[Value]) -> Result<Vec<OsString>, Error> {
-    values.iter()
-        .map(|value| {
-            match value {
-                Value::Bool(v) => Ok(format!("{}", v).into()),
-                Value::Float(v) => Ok(format!("{}", v).into()),
-                Value::Integer(v) => Ok(format!("{}", v).into()),
-                Value::Ratio(v) => Ok(format!("{}", v).into()),
-                Value::Char(v) => Ok(format!("{}", v).into()),
-                Value::String(v) => Ok(format!("{}", v).into()),
-                Value::Bytes(v) if cfg!(unix) => {
-                    use std::os::unix::ffi::OsStringExt;
-                    let bytes = v.clone().into_bytes();
-                    Ok(OsString::from_vec(bytes))
-                },
-                Value::Path(v) => Ok(v.clone().into_os_string()),
-                _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
-            }
-        })
-        .collect()
-}
-
-pub fn integer_to_stdio(i: &Integer, is_async: bool) -> Result<Stdio, Error> {
+pub fn integer_to_stdio(i: &Integer) -> Result<Stdio, Error> {
     match i.to_u8() {
         Some(0) => Ok(Stdio::inherit()),
-        Some(1) => if is_async {
-            Ok(Stdio::piped())
-        } else {
-            Err(ketos_err("cannot pipe synchronous process"))
-        },
+        Some(1) => Ok(Stdio::piped()),
         Some(2) => Ok(Stdio::null()),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }

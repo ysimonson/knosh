@@ -150,30 +150,67 @@ impl Interpreter {
             }
         }));
 
+        ketos_closure!(scope, "proc", |name: &OsStr, args: &[Value]| -> Command {
+            let args_str: Result<Vec<OsString>, Error> = args.iter()
+                .map(|value| {
+                    match value {
+                        Value::Bool(v) => Ok(format!("{}", v).into()),
+                        Value::Float(v) => Ok(format!("{}", v).into()),
+                        Value::Integer(v) => Ok(format!("{}", v).into()),
+                        Value::Ratio(v) => Ok(format!("{}", v).into()),
+                        Value::Char(v) => Ok(format!("{}", v).into()),
+                        Value::String(v) => Ok(format!("{}", v).into()),
+                        Value::Bytes(v) if cfg!(unix) => {
+                            use std::os::unix::ffi::OsStringExt;
+                            let bytes = v.clone().into_bytes();
+                            Ok(OsString::from_vec(bytes))
+                        },
+                        Value::Path(v) => Ok(v.clone().into_os_string()),
+                        _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
+                    }
+                })
+                .collect();
+
+            Ok(Command::new(name, args_str?).into())
+        });
+
+        scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Range(1, 4), args.len(), name)?;
+
+            let mut iter = (&*args).iter();
+            let p = <&Command>::from_value_ref(iter.next().unwrap())?;
+            let (stdin, stdout, stderr) = match iter.collect::<Vec<&Value>>().as_slice() {
+                [] => (process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit()),
+                [Value::Integer(stdout)] => (
+                    process::Stdio::inherit(),
+                    util::integer_to_stdio(stdout)?,
+                    process::Stdio::inherit()
+                ),
+                [Value::Integer(stdout), Value::Integer(stderr)] => (
+                    process::Stdio::inherit(),
+                    util::integer_to_stdio(stdout)?,
+                    util::integer_to_stdio(stderr)?
+                ),
+                [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => (
+                    util::integer_to_stdio(stdin)?,
+                    util::integer_to_stdio(stdout)?,
+                    util::integer_to_stdio(stderr)?
+                ),
+                _ => return Err(ketos_err("expected 0-3 stdio integers"))
+            };
+
+            Ok(p.spawn(stdin, stdout, stderr)?.into())
+        }));
+
+        #[cfg(unix)]
+        ketos_closure!(scope, "exec", |cmd: &Command| -> () {
+            cmd.exec()
+        });
+
         #[cfg(unix)]
         ketos_closure!(scope, "wait", |pid: &Pid| -> () {
             pid.wait()
         });
-
-        #[cfg(unix)]
-        ketos_closure!(scope, "exec", |name: &OsStr, args: &[Value]| -> () {
-            let args_str = util::values_to_osstrings(args)?;
-            let err = process::Command::new(name).args(args_str).exec();
-            Err(ketos_err(format!("{}", err)))
-        });
-
-        scope.add_value_with_name("spawn-async", |name| Value::new_foreign_fn(name, move |_, args| {
-            let p = spawn(name, args, true)?;
-            Ok(p.into())
-        }));
-
-        scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
-            let p = spawn(name, args, false)?;
-            let pid = p.pid();
-            let mut synced_child_processes = synced_child_processes.borrow_mut();
-            synced_child_processes.push(p);
-            Ok(pid.into())
-        }));
 
         ketos_closure!(scope, "child-wait", |child: &ChildProcess| -> ChildExitStatus {
             child.wait()
@@ -367,22 +404,48 @@ impl fmt::Debug for TrapMap {
 }
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildProcess(RefCell<process::Child>);
+pub struct Command(RefCell<process::Command>);
 
-impl ChildProcess {
-    fn new<I, S>(name: &OsStr, args: I, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<Self, Error>
+impl Command {
+    fn new<I, S>(name: &OsStr, args: I) -> Self
     where I: IntoIterator<Item=S>,
           S: AsRef<OsStr>
     {
-        let child = process::Command::new(name)
-            .args(args.into_iter())
+        let mut cmd = process::Command::new(name);
+        cmd.args(args.into_iter());
+        Self { 0: RefCell::new(cmd) }
+    }
+
+    pub fn run(&self) -> Result<(), Error> {
+        let child = self.spawn(process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit())?;
+        child.wait().map(|_| ())
+    }
+
+    fn spawn(&self, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<ChildProcess, Error> {
+        let mut cmd = self.0.borrow_mut();
+        let child = cmd
             .stdin(stdin)
             .stdout(stdout)
             .stderr(stderr)
             .spawn()
             .map_err(|err| ketos_err(format!("{}", err)))?;
+        Ok(ChildProcess::new(child))
+    }
 
-        Ok(Self { 0: RefCell::new(child) })
+    #[cfg(unix)]
+    fn exec(&self) -> Result<(), Error> {
+        let mut cmd = self.0.borrow_mut();
+        let err = cmd.exec();
+        Err(ketos_err(format!("{}", err)))
+    }
+}
+
+#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
+pub struct ChildProcess(RefCell<process::Child>);
+
+impl ChildProcess {
+    fn new(child: process::Child) -> Self {
+        Self { 0: RefCell::new(child) }
     }
 
     fn wait(&self) -> Result<ChildExitStatus, Error> {
@@ -472,45 +535,6 @@ impl Pid {
             }
         }
     }
-}
-
-fn spawn(name: Name, args: &mut [Value], is_async: bool) -> Result<ChildProcess, Error> {
-    check_arity(Arity::Range(1, 3), args.len(), name)?;
-
-    let mut iter = (&*args).iter();
-
-    let proc_name = <&OsStr>::from_value_ref(iter.next().unwrap())?;
-
-    let proc_args = match iter.next() {
-        Some(value) => <&[Value]>::from_value_ref(value)?,
-        None => &[],
-    };
-    let proc_args_str = util::values_to_osstrings(proc_args)?;
-
-    let mut proc_stdin = process::Stdio::inherit();
-    let mut proc_stdout = process::Stdio::inherit();
-    let mut proc_stderr = process::Stdio::inherit();
-    match iter.next() {
-        Some(Value::Integer(stdout)) => {
-            proc_stdout = util::integer_to_stdio(stdout, is_async)?;
-        },
-        Some(Value::List(value)) => match value.as_ref() {
-            [Value::Integer(stdout), Value::Integer(stderr)] => {
-                proc_stdout = util::integer_to_stdio(stdout, is_async)?;
-                proc_stderr = util::integer_to_stdio(stderr, is_async)?;
-            },
-            [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => {
-                proc_stdin = util::integer_to_stdio(stdin, is_async)?;
-                proc_stdout = util::integer_to_stdio(stdout, is_async)?;
-                proc_stderr = util::integer_to_stdio(stderr, is_async)?;
-            },
-            _ => return Err(ketos_err("invalid stdio spec"))
-        },
-        None | Some(Value::Unit) => (),
-        _ => return Err(ketos_err("invalid stdio spec"))
-    };
-    
-    ChildProcess::new(proc_name, proc_args_str, proc_stdin, proc_stdout, proc_stderr)
 }
 
 fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
