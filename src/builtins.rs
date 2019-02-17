@@ -24,7 +24,7 @@ use ketos::value::FromValueRef;
 use linefeed::Signal;
 
 #[cfg(unix)]
-use nix::unistd::{fork, ForkResult, Pid as NixPid};
+use nix::unistd::{fork, ForkResult, Pid};
 #[cfg(unix)]
 use nix::sys::wait::{waitpid, WaitStatus};
 
@@ -129,7 +129,7 @@ impl Interpreter {
 
             match fork() {
                 Ok(ForkResult::Parent { child, .. }) => {
-                    Ok(Pid::new(child).into())
+                    Ok(ChildInterpProcess::new(child).into())
                 },
                 Ok(ForkResult::Child) => {
                     let lambda = Value::Lambda(callback.clone());
@@ -201,14 +201,21 @@ impl Interpreter {
             cmd.exec()
         });
 
-        #[cfg(unix)]
-        ketos_closure!(scope, "wait", |pid: &Pid| -> () {
-            pid.wait()
-        });
+        scope.add_value_with_name("child-wait", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Exact(1), args.len(), name)?;
 
-        ketos_closure!(scope, "child-wait", |child: &ChildProcess| -> ChildExitStatus {
-            child.wait()
-        });
+            let mut iter = (&*args).iter();
+
+            if let Ok(p) = <&ChildProcess>::from_value_ref(iter.next().unwrap()) {
+                p.wait();
+                Ok(().into())
+            } else if let Ok(p) = <&ChildInterpProcess>::from_value_ref(iter.next().unwrap()) {
+                p.wait();
+                Ok(().into())
+            } else {
+                Err(ketos_err("expected child process or child interp process"))
+            }
+        }));
 
         ketos_closure!(scope, "child-poll", |child: &ChildProcess| -> ChildExitStatus {
             child.poll()
@@ -466,10 +473,10 @@ impl ChildExitStatus {
 
 #[cfg(unix)]
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct Pid(pub NixPid);
+pub struct ChildInterpProcess(pub Pid);
 
-impl Pid {
-    fn new(pid: NixPid) -> Self {
+impl ChildInterpProcess {
+    fn new(pid: Pid) -> Self {
         Self { 0: pid }
     }
 
