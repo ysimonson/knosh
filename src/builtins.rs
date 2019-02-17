@@ -40,11 +40,11 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
         let traps = [
-            Rc::new(TrapMap::new("signal-continue", 0)),
-            Rc::new(TrapMap::new("signal-interrupt", 1)),
-            Rc::new(TrapMap::new("signal-quit", 2)),
-            Rc::new(TrapMap::new("signal-resize", 3)),
-            Rc::new(TrapMap::new("signal-suspend", 4)),
+            Rc::new(TrapMap::new("signal/continue", 0)),
+            Rc::new(TrapMap::new("signal/interrupt", 1)),
+            Rc::new(TrapMap::new("signal/quit", 2)),
+            Rc::new(TrapMap::new("signal/resize", 3)),
+            Rc::new(TrapMap::new("signal/suspend", 4)),
         ];
 
         Self {
