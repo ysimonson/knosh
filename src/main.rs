@@ -67,6 +67,8 @@ struct KnoshOpts {
     restrict: Option<String>,
     #[options(no_short, help = "Do not run ~/.knoshrc.ket on startup")]
     no_rc: bool,
+    #[options(no_short, help = "Do not inject files in `PATH` as shortcut functions")]
+    no_path_fns: bool,
 }
 
 fn run() -> i32 {
@@ -115,9 +117,11 @@ fn run() -> i32 {
     let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
 
-    if let Err(err) = interp.add_executables() {
-        display_error(&interp, &err);
-        return 1;
+    if !opts.no_path_fns {
+        if let Err(err) = interp.add_executables() {
+            display_error(&interp, &err);
+            return 1;
+        }
     }
 
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
