@@ -58,7 +58,8 @@ impl Interpreter {
     pub fn add_builtins(&self) {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
-        let interp = self.interp.clone();
+        let interp_fork = self.interp.clone();
+        let interp_reset = self.interp.clone();
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -130,7 +131,7 @@ impl Interpreter {
                 },
                 Ok(ForkResult::Child) => {
                     let lambda = Value::Lambda(callback.clone());
-                    match interp.call_value(lambda, vec![]) {
+                    match interp_fork.call_value(lambda, vec![]) {
                         Ok(_) => process::exit(0),
                         Err(_) => process::exit(1),
                     }
@@ -280,53 +281,15 @@ impl Interpreter {
         ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<ChildProcess> {
             Ok(pipe.children())
         });
+
+        ketos_closure!(scope, "interp/reset", || -> () {
+            add_executables(&interp_reset)
+        });
     }
 
     pub fn add_executables(&self) -> Result<(), Error> {
-        let interp_scope = self.interp.clone();
-        let scope = interp_scope.scope();
-        let mut added = HashSet::new();
-
-        let path = env::var("PATH").map_err(|err| {
-            ketos_err(format!("`PATH` environment variable is not set or not valid unicode: {}", err))
-        })?;
-
-        for dirpath in path.split(":") {
-            let entries = fs::read_dir(dirpath).map_err(|err| {
-                ketos_err(format!("could not read dir `{}`: {}", dirpath, err))
-            })?;
-
-            for entry in entries {
-                let entry = entry.map_err(|err| {
-                    ketos_err(format!("error iterating over `{}`: {}", dirpath, err))
-                })?;
-
-                let filepath = entry.path().into_os_string();
-
-                let metadata = entry.metadata().map_err(|err| {
-                    ketos_err(format!("could not get metadata for `{:?}`: {}", filepath, err))
-                })?;
-
-                // TODO: check if executable as well?
-                if !metadata.is_file() {
-                    continue;
-                }
-            
-                if let Ok(name) = entry.file_name().into_string() {
-                    if added.contains(&name) {
-                        continue;
-                    }
-
-                    scope.add_value_with_name(&name, |name| Value::new_foreign_fn(name, move |_, args| {
-                        Ok(process_promise(&filepath, args)?.into())
-                    }));
-
-                    added.insert(name);
-                }
-            }
-        }
-
-        Ok(())
+        let interp = self.interp.clone();
+        add_executables(&interp)
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -678,4 +641,50 @@ fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
         2 => Ok(process::Stdio::null()),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }
+}
+
+fn add_executables(interp: &KetosInterpreter) -> Result<(), Error> {
+    let scope = interp.scope();
+    let mut added = HashSet::new();
+
+    let path = env::var("PATH").map_err(|err| {
+        ketos_err(format!("`PATH` environment variable is not set or not valid unicode: {}", err))
+    })?;
+
+    for dirpath in path.split(":") {
+        let entries = fs::read_dir(dirpath).map_err(|err| {
+            ketos_err(format!("could not read dir `{}`: {}", dirpath, err))
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                ketos_err(format!("error iterating over `{}`: {}", dirpath, err))
+            })?;
+
+            let filepath = entry.path().into_os_string();
+
+            let metadata = entry.metadata().map_err(|err| {
+                ketos_err(format!("could not get metadata for `{:?}`: {}", filepath, err))
+            })?;
+
+            // TODO: check if executable as well?
+            if !metadata.is_file() {
+                continue;
+            }
+        
+            if let Ok(name) = entry.file_name().into_string() {
+                if added.contains(&name) {
+                    continue;
+                }
+
+                scope.add_value_with_name(&name, |name| Value::new_foreign_fn(name, move |_, args| {
+                    Ok(process_promise(&filepath, args)?.into())
+                }));
+
+                added.insert(name);
+            }
+        }
+    }
+
+    Ok(())
 }
