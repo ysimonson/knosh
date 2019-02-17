@@ -141,13 +141,7 @@ impl Interpreter {
             }
         }));
 
-        ketos_closure!(scope, "proc", |name: &OsStr, args: &[Value]| -> ChildProcessPromise {
-            let args_str: Result<Vec<OsString>, Error> = args.iter()
-                .map(to_os_string)
-                .collect();
-
-            Ok(ChildProcessPromise::new(name.to_os_string(), args_str?).into())
-        });
+        ketos_fn! { scope => "proc" => fn process_promise(name: &OsStr, args: &[Value]) -> ChildProcessPromise }
 
         scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(1, 4), args.len(), name)?;
@@ -324,11 +318,7 @@ impl Interpreter {
                     }
 
                     scope.add_value_with_name(&name, |name| Value::new_foreign_fn(name, move |_, args| {
-                        let args_str: Result<Vec<OsString>, Error> = args.iter()
-                            .map(to_os_string)
-                            .collect();
-
-                        Ok(ChildProcessPromise::new(filepath.clone(), args_str?).into())
+                        Ok(process_promise(&filepath, args)?.into())
                     }));
 
                     added.insert(name);
@@ -639,6 +629,28 @@ impl ChildInterpProcess {
     }
 }
 
+fn process_promise(name: &OsStr, args: &[Value]) -> Result<ChildProcessPromise, Error> {
+    let args_str: Result<Vec<OsString>, Error> = args.iter()
+        .map(|value| match value {
+            Value::Bool(v) => Ok(format!("{}", v).into()),
+            Value::Float(v) => Ok(format!("{}", v).into()),
+            Value::Integer(v) => Ok(format!("{}", v).into()),
+            Value::Ratio(v) => Ok(format!("{}", v).into()),
+            Value::Char(v) => Ok(format!("{}", v).into()),
+            Value::String(v) => Ok(format!("{}", v).into()),
+            Value::Bytes(v) if cfg!(unix) => {
+                use std::os::unix::ffi::OsStringExt;
+                let bytes = v.clone().into_bytes();
+                Ok(OsString::from_vec(bytes))
+            },
+            Value::Path(v) => Ok(v.clone().into_os_string()),
+            _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
+        })
+        .collect();
+
+    Ok(ChildProcessPromise::new(name.to_os_string(), args_str?).into())
+}
+
 fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
     if arity.accepts(len as u32) {
         Ok(())
@@ -665,23 +677,5 @@ fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
         1 => Ok(process::Stdio::piped()),
         2 => Ok(process::Stdio::null()),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
-    }
-}
-
-fn to_os_string(value: &Value) -> Result<OsString, Error> {
-    match value {
-        Value::Bool(v) => Ok(format!("{}", v).into()),
-        Value::Float(v) => Ok(format!("{}", v).into()),
-        Value::Integer(v) => Ok(format!("{}", v).into()),
-        Value::Ratio(v) => Ok(format!("{}", v).into()),
-        Value::Char(v) => Ok(format!("{}", v).into()),
-        Value::String(v) => Ok(format!("{}", v).into()),
-        Value::Bytes(v) if cfg!(unix) => {
-            use std::os::unix::ffi::OsStringExt;
-            let bytes = v.clone().into_bytes();
-            Ok(OsString::from_vec(bytes))
-        },
-        Value::Path(v) => Ok(v.clone().into_os_string()),
-        _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
     }
 }
