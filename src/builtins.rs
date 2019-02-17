@@ -64,9 +64,9 @@ impl Interpreter {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
         }
 
-        scope.add_named_value("io-inherit", Value::Integer(Integer::from_u8(0)));
-        scope.add_named_value("io-piped", Value::Integer(Integer::from_u8(1)));
-        scope.add_named_value("io-null", Value::Integer(Integer::from_u8(2)));
+        scope.add_named_value("stdio/inherit", Value::Integer(Integer::from_u8(0)));
+        scope.add_named_value("stdio/piped", Value::Integer(Integer::from_u8(1)));
+        scope.add_named_value("stdio/null", Value::Integer(Integer::from_u8(2)));
 
         ketos_closure!(scope, "trap", |traps: &TrapMap, callback: &Lambda| -> usize {
             traps.add(callback)
@@ -233,7 +233,7 @@ impl Interpreter {
         });
 
         #[cfg(unix)]
-        scope.add_value_with_name("stdin-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+        scope.add_value_with_name("stdin/fd", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(0, 1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
@@ -247,7 +247,7 @@ impl Interpreter {
         }));
 
         #[cfg(unix)]
-        scope.add_value_with_name("stdout-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+        scope.add_value_with_name("stdout/fd", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(0, 1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
@@ -261,7 +261,7 @@ impl Interpreter {
         }));
 
         #[cfg(unix)]
-        scope.add_value_with_name("stderr-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+        scope.add_value_with_name("stderr/fd", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(0, 1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
@@ -274,16 +274,16 @@ impl Interpreter {
             }
         }));
 
-        ketos_closure!(scope, "exit-success?", |status: &ChildExitStatus| -> bool {
+        ketos_closure!(scope, "exit/success?", |status: &ChildExitStatus| -> bool {
             Ok(status.success())
         });
 
-        ketos_closure!(scope, "exit-code", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit/code", |status: &ChildExitStatus| -> i32 {
             status.code()
         });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exit-signal", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit/signal", |status: &ChildExitStatus| -> i32 {
             status.signal()
         });
 
