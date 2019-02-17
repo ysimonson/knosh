@@ -54,6 +54,7 @@ impl Interpreter {
         }
     }
 
+    // TODO: function to get children from a pipe
     pub fn add_builtins(&self) {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
@@ -161,7 +162,7 @@ impl Interpreter {
                 })
                 .collect();
 
-            Ok(ChildProcessPromise::new(name, args_str?).into())
+            Ok(ChildProcessPromise::new(name.to_os_string(), args_str?).into())
         });
 
         scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
@@ -170,22 +171,10 @@ impl Interpreter {
             let mut iter = (&*args).iter();
             let p = <&ChildProcessPromise>::from_value_ref(iter.next().unwrap())?;
             let (stdin, stdout, stderr) = match iter.collect::<Vec<&Value>>().as_slice() {
-                [] => (process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit()),
-                [Value::Integer(stdout)] => (
-                    process::Stdio::inherit(),
-                    util::integer_to_stdio(stdout)?,
-                    process::Stdio::inherit()
-                ),
-                [Value::Integer(stdout), Value::Integer(stderr)] => (
-                    process::Stdio::inherit(),
-                    util::integer_to_stdio(stdout)?,
-                    util::integer_to_stdio(stderr)?
-                ),
-                [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => (
-                    util::integer_to_stdio(stdin)?,
-                    util::integer_to_stdio(stdout)?,
-                    util::integer_to_stdio(stderr)?
-                ),
+                [] => (0, 0, 0),
+                [Value::Integer(stdout)] => (0, to_stdio_u8(stdout)?, 0),
+                [Value::Integer(stdout), Value::Integer(stderr)] => (0, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
+                [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => (to_stdio_u8(stdin)?, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
                 _ => return Err(ketos_err("expected 0-3 stdio integers"))
             };
 
@@ -201,12 +190,21 @@ impl Interpreter {
             check_arity(Arity::Exact(1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
+            let value = iter.next().unwrap();
 
-            if let Ok(p) = <&ChildProcess>::from_value_ref(iter.next().unwrap()) {
-                p.wait();
+            if let Ok(p) = <&ChildProcess>::from_value_ref(value) {
+                p.wait()?;
                 Ok(().into())
-            } else if let Ok(p) = <&ChildInterpProcess>::from_value_ref(iter.next().unwrap()) {
-                p.wait();
+            } else if let Ok(p) = <&Pipe>::from_value_ref(value) {
+                let mut errors = p.wait();
+
+                if let Some(err) = errors.pop() {
+                    Err(err.into())
+                } else {
+                    Ok(().into())
+                }
+            } else if let Ok(p) = <&ChildInterpProcess>::from_value_ref(value) {
+                p.wait()?;
                 Ok(().into())
             } else {
                 Err(ketos_err("expected child process or child interp process"))
@@ -292,30 +290,13 @@ impl Interpreter {
         scope.add_value_with_name("|", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Min(2), args.len(), name)?;
 
-            let procs: Result<Vec<&ChildProcess>, ExecError> = args.into_iter()
+            let ps: Result<Vec<&ChildProcessPromise>, ExecError> = args.into_iter()
                 .map(|arg| {
-                    <&ChildProcess>::from_value_ref(arg)
+                    <&ChildProcessPromise>::from_value_ref(arg)
                 })
                 .collect();
 
-            let procs = procs?;
-
-            for i in 1..procs.len() {
-                let src = &procs[i - 1];
-                let dest = &procs[i];
-                let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
-                let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
-
-                synced_pipes.push(thread::spawn(move || {
-                    match io::copy(&mut stdout, &mut stdin) {
-                        Ok(_) => Ok(()),
-                        Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-                        Err(err) => Err(err)
-                    }
-                }));
-            }
-
-            Ok(().into())
+            Ok(PipePromise::new(ps?).into())
         }));
     }
 
@@ -393,29 +374,114 @@ impl fmt::Debug for TrapMap {
 }
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildProcessPromise(RefCell<process::Command>);
+pub struct PipePromise(RefCell<Vec<ChildProcessPromise>>);
 
-impl ChildProcessPromise {
-    fn new<I, S>(name: &OsStr, args: I) -> Self
-    where I: IntoIterator<Item=S>,
-          S: AsRef<OsStr>
-    {
-        let mut cmd = process::Command::new(name);
-        cmd.args(args.into_iter());
-        Self { 0: RefCell::new(cmd) }
+impl PipePromise {
+    fn new(children: Vec<&ChildProcessPromise>) -> Self {
+        Self { 0: RefCell::new(children.into_iter().cloned().collect()) }
     }
 
     pub fn run(&self) -> Result<(), Error> {
-        let child = self.spawn(process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit())?;
+        let pipe = self.spawn(0, 0, 0)?;
+        
+        if let Some(err) = pipe.wait().pop() {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Pipe, Error> {
+        let children = self.0.borrow_mut();
+        debug_assert!(children.len() >= 2);
+        let mut spawned_children = vec![children[0].spawn(stdin, 1, stderr)?];
+
+        for i in 1..children.len()-2 {
+            spawned_children.push(children[i].spawn(1, 1, stderr)?)
+        }
+
+        spawned_children.push(children[children.len()-1].spawn(1, stdout, stderr)?);
+        Ok(Pipe::new(spawned_children))
+    }
+}
+
+#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
+pub struct Pipe {
+    children: Vec<ChildProcess>,
+    threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>
+}
+
+impl Pipe {
+    fn new(children: Vec<ChildProcess>) -> Self {
+        let mut threads = Vec::new();
+
+        for i in 1..children.len() {
+            let src = &children[i - 1];
+            let dest = &children[i];
+            let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
+            let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
+
+            threads.push(thread::spawn(move || {
+                match io::copy(&mut stdout, &mut stdin) {
+                    Ok(_) => Ok(()),
+                    Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+                    Err(err) => Err(err)
+                }
+            }));
+        }
+
+        Self { children, threads: RefCell::new(threads) }
+    }
+
+    fn wait(&self) -> Vec<Error> {
+        let mut threads = self.threads.borrow_mut();
+        let mut errors = Vec::new();
+
+        for t in threads.drain(..) {
+            match t.join() {
+                Ok(Err(err)) => {
+                    let err = ketos_err(format!("pipe failed: {}", err));
+                    errors.push(err);
+                },
+                Err(err) => {
+                    let err = ketos_err(format!("pipe thread panic: {:?}", err));
+                    errors.push(err);
+                },
+                Ok(_) => ()
+            }
+        }
+
+        errors
+    }
+}
+
+#[derive(Clone, Debug, ForeignValue, FromValueRef, IntoValue)]
+pub struct ChildProcessPromise {
+    name: OsString,
+    args: Vec<OsString>
+}
+
+impl ChildProcessPromise {
+    fn new(name: OsString, args: Vec<OsString>) -> Self {
+        Self { name, args }
+    }
+
+    fn command(&self) -> process::Command {
+        let mut cmd = process::Command::new(&self.name);
+        cmd.args(self.args.iter());
+        cmd
+    }
+
+    pub fn run(&self) -> Result<(), Error> {
+        let child = self.spawn(0, 0, 0)?;
         child.wait().map(|_| ())
     }
 
-    fn spawn(&self, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<ChildProcess, Error> {
-        let mut cmd = self.0.borrow_mut();
-        let child = cmd
-            .stdin(stdin)
-            .stdout(stdout)
-            .stderr(stderr)
+    fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<ChildProcess, Error> {
+        let child = self.command()
+            .stdin(to_stdio_value(stdin)?)
+            .stdout(to_stdio_value(stdout)?)
+            .stderr(to_stdio_value(stderr)?)
             .spawn()
             .map_err(|err| ketos_err(format!("{}", err)))?;
         Ok(ChildProcess::new(child))
@@ -423,8 +489,7 @@ impl ChildProcessPromise {
 
     #[cfg(unix)]
     fn exec(&self) -> Result<(), Error> {
-        let mut cmd = self.0.borrow_mut();
-        let err = cmd.exec();
+        let err = self.command().exec();
         Err(ketos_err(format!("{}", err)))
     }
 }
@@ -539,3 +604,20 @@ fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
         Err(err.into())
     }
 }
+
+fn to_stdio_u8(i: &Integer) -> Result<u8, Error> {
+    match i.to_u8() {
+        Some(value) if value <= 2 => Ok(value),
+        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
+    }
+}
+
+fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
+    match i {
+        0 => Ok(process::Stdio::inherit()),
+        1 => Ok(process::Stdio::piped()),
+        2 => Ok(process::Stdio::null()),
+        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
+    }
+}
+

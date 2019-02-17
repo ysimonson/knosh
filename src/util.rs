@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::ffi::{OsStr, OsString};
-use std::process::Stdio;
 
 use dirs;
-use ketos::{Error, Integer};
+use ketos::Error;
 
 use crate::error::ketos_err;
 
@@ -57,13 +56,4 @@ pub fn expand_path<S: AsRef<str>>(path: S) -> Result<PathBuf, Error> {
     };
 
     Ok(path_buf)
-}
-
-pub fn integer_to_stdio(i: &Integer) -> Result<Stdio, Error> {
-    match i.to_u8() {
-        Some(0) => Ok(Stdio::inherit()),
-        Some(1) => Ok(Stdio::piped()),
-        Some(2) => Ok(Stdio::null()),
-        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
-    }
 }
