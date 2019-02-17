@@ -25,8 +25,8 @@ use std::rc::Rc;
 
 use gumdrop::{Options, ParsingStyle};
 use ketos::{
-    complete_name, Builder, Context, Error, Interpreter, ParseError,
-    ParseErrorKind, RestrictConfig, Value
+    complete_name, Builder, Context, Error, FromValueRef, Interpreter,
+    ParseError, ParseErrorKind, RestrictConfig, Value
 };
 use ketos::compile::compile;
 use ketos::io::{IoError, IoMode};
@@ -210,15 +210,23 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
 }
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
-    match execute_exprs(interp, exprs, path) {
-        Ok(value) => {
+    let err = match execute_exprs(interp, exprs, path) {
+        Ok(value) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+            p.run()
+        } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
+            p.run()
+        } else {
             interp.interp.clone().display_value(&value);
-            true
-        },
-        Err(err) => {
-            display_error(&interp, &err);
-            false
+            Ok(())
         }
+        Err(err) => Err(err)
+    };
+
+    if let Err(err) = err {
+        display_error(&interp, &err);
+        false
+    } else {
+        true
     }
 }
 
