@@ -74,10 +74,6 @@ impl Interpreter {
         ketos_closure!(scope, "untrap", |traps: &TrapMap, key: usize| -> bool {
             traps.remove(key)
         });
-
-        ketos_closure!(scope, "pid", || -> u32 {
-            Ok(process::id())
-        });
         
         ketos_closure!(scope, "set-env", |key: &str, value: &str| -> () {
             env::set_var(key, value);
@@ -201,7 +197,7 @@ impl Interpreter {
             cmd.exec()
         });
 
-        scope.add_value_with_name("child-wait", |name| Value::new_foreign_fn(name, move |_, args| {
+        scope.add_value_with_name("wait", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Exact(1), args.len(), name)?;
 
             let mut iter = (&*args).iter();
@@ -217,43 +213,79 @@ impl Interpreter {
             }
         }));
 
-        ketos_closure!(scope, "child-poll", |child: &ChildProcess| -> ChildExitStatus {
+        ketos_closure!(scope, "poll", |child: &ChildProcess| -> ChildExitStatus {
             child.poll()
         });
 
-        ketos_closure!(scope, "child-pid", |child: &ChildProcess| -> u32 {
-            Ok(child.pid())
-        });
+        scope.add_value_with_name("pid", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Range(0, 1), args.len(), name)?;
 
-        ketos_closure!(scope, "child-write", |child: &ChildProcess, bytes: &[u8]| -> () {
+            let mut iter = (&*args).iter();
+
+            if let Some(value) = iter.next() {
+                let child = <&ChildProcess>::from_value_ref(value)?;
+                Ok(child.pid().into())
+            } else {
+                Ok(process::id().into())
+            }
+        }));
+
+        ketos_closure!(scope, "write", |child: &ChildProcess, bytes: &[u8]| -> () {
             child.write(bytes)
         });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "child-stdin-fd", |child: &ChildProcess| -> i32 {
-            Ok(child.stdin_fd())
-        });
+        scope.add_value_with_name("stdin-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Range(0, 1), args.len(), name)?;
+
+            let mut iter = (&*args).iter();
+
+            if let Some(value) = iter.next() {
+                let child = <&ChildProcess>::from_value_ref(value)?;
+                Ok(child.stdin_fd().into())
+            } else {
+                Ok(io::stdin().as_raw_fd().into())
+            }
+        }));
 
         #[cfg(unix)]
-        ketos_closure!(scope, "child-stdout-fd", |child: &ChildProcess| -> i32 {
-            Ok(child.stdout_fd())
-        });
+        scope.add_value_with_name("stdout-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Range(0, 1), args.len(), name)?;
+
+            let mut iter = (&*args).iter();
+
+            if let Some(value) = iter.next() {
+                let child = <&ChildProcess>::from_value_ref(value)?;
+                Ok(child.stdout_fd().into())
+            } else {
+                Ok(io::stdout().as_raw_fd().into())
+            }
+        }));
 
         #[cfg(unix)]
-        ketos_closure!(scope, "child-stderr-fd", |child: &ChildProcess| -> i32 {
-            Ok(child.stderr_fd())
-        });
+        scope.add_value_with_name("stderr-fd", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Range(0, 1), args.len(), name)?;
 
-        ketos_closure!(scope, "child-exit-success", |status: &ChildExitStatus| -> bool {
+            let mut iter = (&*args).iter();
+
+            if let Some(value) = iter.next() {
+                let child = <&ChildProcess>::from_value_ref(value)?;
+                Ok(child.stderr_fd().into())
+            } else {
+                Ok(io::stderr().as_raw_fd().into())
+            }
+        }));
+
+        ketos_closure!(scope, "exit-success?", |status: &ChildExitStatus| -> bool {
             Ok(status.success())
         });
 
-        ketos_closure!(scope, "child-exit-code", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit-code", |status: &ChildExitStatus| -> i32 {
             status.code()
         });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "child-exit-signal", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit-signal", |status: &ChildExitStatus| -> i32 {
             status.signal()
         });
 
