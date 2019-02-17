@@ -54,7 +54,6 @@ impl Interpreter {
         }
     }
 
-    // TODO: function to get children from a pipe
     pub fn add_builtins(&self) {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
@@ -298,6 +297,10 @@ impl Interpreter {
 
             Ok(PipePromise::new(ps?).into())
         }));
+
+        ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<ChildProcess> {
+            Ok(pipe.children())
+        });
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -407,7 +410,7 @@ impl PipePromise {
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct Pipe {
-    children: Vec<ChildProcess>,
+    children: RefCell<Vec<ChildProcess>>,
     threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>
 }
 
@@ -430,7 +433,15 @@ impl Pipe {
             }));
         }
 
-        Self { children, threads: RefCell::new(threads) }
+        Self {
+            children: RefCell::new(children),
+            threads: RefCell::new(threads)
+        }
+    }
+
+    fn children(&self) -> Vec<ChildProcess> {
+        let mut children = self.children.borrow_mut();
+        children.drain(..).collect()
     }
 
     fn wait(&self) -> Vec<Error> {
