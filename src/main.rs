@@ -212,15 +212,8 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
     match execute_exprs(interp, exprs, path) {
         Ok(value) => {
-            let mut has_child_error = false;
-
-            for err in interp.wait_synced() {
-                display_error(&interp, &err);
-                has_child_error = true;
-            }
-
             interp.interp.clone().display_value(&value);
-            has_child_error
+            true
         },
         Err(err) => {
             display_error(&interp, &err);

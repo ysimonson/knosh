@@ -34,8 +34,6 @@ use crate::util;
 pub struct Interpreter {
     pub interp: Rc<KetosInterpreter>,
     traps: [Rc<TrapMap>; 5],
-    synced_child_processes: Rc<RefCell<Vec<ChildProcess>>>,
-    synced_pipes: Rc<RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>>,
     is_root: bool,
 }
 
@@ -52,8 +50,6 @@ impl Interpreter {
         Self {
             interp: Rc::new(interp),
             traps,
-            synced_child_processes: Rc::new(RefCell::new(Vec::new())),
-            synced_pipes: Rc::new(RefCell::new(Vec::new())),
             is_root,
         }
     }
@@ -62,8 +58,6 @@ impl Interpreter {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
         let interp = self.interp.clone();
-        let synced_child_processes = self.synced_child_processes.clone();
-        let synced_pipes = self.synced_pipes.clone();
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -150,7 +144,7 @@ impl Interpreter {
             }
         }));
 
-        ketos_closure!(scope, "proc", |name: &OsStr, args: &[Value]| -> Command {
+        ketos_closure!(scope, "proc", |name: &OsStr, args: &[Value]| -> ChildProcessPromise {
             let args_str: Result<Vec<OsString>, Error> = args.iter()
                 .map(|value| {
                     match value {
@@ -171,14 +165,14 @@ impl Interpreter {
                 })
                 .collect();
 
-            Ok(Command::new(name, args_str?).into())
+            Ok(ChildProcessPromise::new(name, args_str?).into())
         });
 
         scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(1, 4), args.len(), name)?;
 
             let mut iter = (&*args).iter();
-            let p = <&Command>::from_value_ref(iter.next().unwrap())?;
+            let p = <&ChildProcessPromise>::from_value_ref(iter.next().unwrap())?;
             let (stdin, stdout, stderr) = match iter.collect::<Vec<&Value>>().as_slice() {
                 [] => (process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit()),
                 [Value::Integer(stdout)] => (
@@ -203,7 +197,7 @@ impl Interpreter {
         }));
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exec", |cmd: &Command| -> () {
+        ketos_closure!(scope, "exec", |cmd: &ChildProcessPromise| -> () {
             cmd.exec()
         });
 
@@ -266,7 +260,6 @@ impl Interpreter {
                 .collect();
 
             let procs = procs?;
-            let mut synced_pipes = synced_pipes.borrow_mut();
 
             for i in 1..procs.len() {
                 let src = &procs[i - 1];
@@ -285,49 +278,6 @@ impl Interpreter {
 
             Ok(().into())
         }));
-    }
-
-    pub fn wait_synced(&self) -> Vec<Error> {
-        let mut errors = Vec::new();
-
-        {
-            let synced_child_processes = self.synced_child_processes.clone();
-            let mut synced_child_processes = synced_child_processes.borrow_mut();
-
-            for child_process in synced_child_processes.drain(..) {
-                match child_process.wait() {
-                    Ok(ref status) if !status.success() => {
-                        let err = ketos_err(format!("non-successful status code: {:?}", status));
-                        errors.push(err);
-                    }
-                    Err(err) => {
-                        errors.push(err);
-                    }
-                    Ok(_) => ()
-                }
-            }
-        }
-
-        {
-            let synced_pipes = self.synced_pipes.clone();
-            let mut synced_pipes = synced_pipes.borrow_mut();
-
-            for synced_pipe in synced_pipes.drain(..) {
-                match synced_pipe.join() {
-                    Ok(Err(err)) => {
-                        let err = ketos_err(format!("pipe failed: {}", err));
-                        errors.push(err);
-                    },
-                    Err(err) => {
-                        let err = ketos_err(format!("pipe thread panic: {:?}", err));
-                        errors.push(err);
-                    },
-                    Ok(_) => ()
-                }
-            }
-        }
-
-        errors
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -404,9 +354,9 @@ impl fmt::Debug for TrapMap {
 }
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct Command(RefCell<process::Command>);
+pub struct ChildProcessPromise(RefCell<process::Command>);
 
-impl Command {
+impl ChildProcessPromise {
     fn new<I, S>(name: &OsStr, args: I) -> Self
     where I: IntoIterator<Item=S>,
           S: AsRef<OsStr>
@@ -525,7 +475,8 @@ impl Pid {
 
     fn wait(&self) -> Result<(), Error> {
         // Ideally we'd call `waitpid` once, but `nix` as of 0.13.0 doesn't
-        // support `WIFSIGNALED`
+        // support `WIFSIGNALED`, so we have to repeatedly listen for all
+        // signals
         loop {
             match waitpid(Some(self.0), None) {
                 Ok(WaitStatus::Exited(_, code)) if code == 0 => return Ok(()),
