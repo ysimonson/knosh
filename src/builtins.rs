@@ -2,11 +2,12 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 use std::env;
 use std::fmt;
+use std::fs;
 use std::usize;
 use std::process;
 use std::ffi::{OsStr, OsString};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,23 +143,7 @@ impl Interpreter {
 
         ketos_closure!(scope, "proc", |name: &OsStr, args: &[Value]| -> ChildProcessPromise {
             let args_str: Result<Vec<OsString>, Error> = args.iter()
-                .map(|value| {
-                    match value {
-                        Value::Bool(v) => Ok(format!("{}", v).into()),
-                        Value::Float(v) => Ok(format!("{}", v).into()),
-                        Value::Integer(v) => Ok(format!("{}", v).into()),
-                        Value::Ratio(v) => Ok(format!("{}", v).into()),
-                        Value::Char(v) => Ok(format!("{}", v).into()),
-                        Value::String(v) => Ok(format!("{}", v).into()),
-                        Value::Bytes(v) if cfg!(unix) => {
-                            use std::os::unix::ffi::OsStringExt;
-                            let bytes = v.clone().into_bytes();
-                            Ok(OsString::from_vec(bytes))
-                        },
-                        Value::Path(v) => Ok(v.clone().into_os_string()),
-                        _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
-                    }
-                })
+                .map(to_os_string)
                 .collect();
 
             Ok(ChildProcessPromise::new(name.to_os_string(), args_str?).into())
@@ -301,6 +286,57 @@ impl Interpreter {
         ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<ChildProcess> {
             Ok(pipe.children())
         });
+    }
+
+    pub fn add_executables(&self) -> Result<(), Error> {
+        let interp_scope = self.interp.clone();
+        let scope = interp_scope.scope();
+        let mut added = HashSet::new();
+
+        let path = env::var("PATH").map_err(|err| {
+            ketos_err(format!("`PATH` environment variable is not set or not valid unicode: {}", err))
+        })?;
+
+        for dirpath in path.split(":") {
+            let entries = fs::read_dir(dirpath).map_err(|err| {
+                ketos_err(format!("could not read dir `{}`: {}", dirpath, err))
+            })?;
+
+            for entry in entries {
+                let entry = entry.map_err(|err| {
+                    ketos_err(format!("error iterating over `{}`: {}", dirpath, err))
+                })?;
+
+                let filepath = entry.path().into_os_string();
+
+                let metadata = entry.metadata().map_err(|err| {
+                    ketos_err(format!("could not get metadata for `{:?}`: {}", filepath, err))
+                })?;
+
+                // TODO: check if executable as well?
+                if !metadata.is_file() {
+                    continue;
+                }
+            
+                if let Ok(name) = entry.file_name().into_string() {
+                    if added.contains(&name) {
+                        continue;
+                    }
+
+                    scope.add_value_with_name(&name, |name| Value::new_foreign_fn(name, move |_, args| {
+                        let args_str: Result<Vec<OsString>, Error> = args.iter()
+                            .map(to_os_string)
+                            .collect();
+
+                        Ok(ChildProcessPromise::new(filepath.clone(), args_str?).into())
+                    }));
+
+                    added.insert(name);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -632,3 +668,20 @@ fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
     }
 }
 
+fn to_os_string(value: &Value) -> Result<OsString, Error> {
+    match value {
+        Value::Bool(v) => Ok(format!("{}", v).into()),
+        Value::Float(v) => Ok(format!("{}", v).into()),
+        Value::Integer(v) => Ok(format!("{}", v).into()),
+        Value::Ratio(v) => Ok(format!("{}", v).into()),
+        Value::Char(v) => Ok(format!("{}", v).into()),
+        Value::String(v) => Ok(format!("{}", v).into()),
+        Value::Bytes(v) if cfg!(unix) => {
+            use std::os::unix::ffi::OsStringExt;
+            let bytes = v.clone().into_bytes();
+            Ok(OsString::from_vec(bytes))
+        },
+        Value::Path(v) => Ok(v.clone().into_os_string()),
+        _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
+    }
+}

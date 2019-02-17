@@ -115,6 +115,11 @@ fn run() -> i32 {
     let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
 
+    if let Err(err) = interp.add_executables() {
+        display_error(&interp, &err);
+        return 1;
+    }
+
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
     if let Some(ref expr) = opts.expr {
