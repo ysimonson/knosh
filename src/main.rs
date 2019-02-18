@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::fs::File;
 use std::rc::Rc;
+use std::collections::{HashMap, BTreeMap};
 
 use gumdrop::{Options, ParsingStyle};
 use ketos::{
@@ -294,7 +295,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
         *key.borrow_mut() = Some(ketos_interp.context().clone());
     });
 
-    interface.set_completer(Arc::new(KnoshCompleter));
+    interface.set_completer(Arc::new(KnoshCompleter::default()));
     interface.set_report_signal(Signal::Interrupt, true);
     interface.set_report_signal(Signal::Continue, true);
     interface.set_report_signal(Signal::Resize, true);
@@ -348,8 +349,6 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     Ok(())
 }
 
-struct KnoshCompleter;
-
 thread_local! {
     // linefeed requires a Completer to impl Send + Sync.
     // Because a Context object contains Rc, it does not impl these traits.
@@ -364,6 +363,11 @@ fn thread_context() -> Context {
             .clone()
             .unwrap_or_else(|| panic!("no thread-local Context object set"))
     })
+}
+
+#[derive(Default)]
+struct KnoshCompleter {
+    args: HashMap<String, BTreeMap<String, usize>>
 }
 
 impl<Term: Terminal> Completer<Term> for KnoshCompleter {
@@ -414,6 +418,15 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
                 }
             }
 
+            // complete args
+            if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit("(").next() {
+                if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
+                    if let Some(args) = self.args.get(fn_name) {
+                        words.extend(self.complete_args(args, word));
+                    }
+                }
+            }
+
             if words.len() > 0 {
                 Some(words.into_iter().map(Completion::simple).collect())
             } else {
@@ -442,6 +455,27 @@ impl KnoshCompleter {
             }
         }
 
+        words
+    }
+
+    fn complete_args(&self, args: &BTreeMap<String, usize>, word: &str) -> Vec<String> {
+        let mut candidates = BTreeMap::new();
+
+        for (arg, count) in args.range(word.to_string()..) {
+            if !arg.starts_with(word) {
+                break;
+            }
+
+            candidates.entry(count)
+                .or_insert_with(Vec::default)
+                .push(word);
+        }
+
+        let mut words: Vec<String> = candidates.values()
+            .flatten()
+            .map(|s| s.to_string())
+            .collect();
+        words.reverse();
         words
     }
 }
