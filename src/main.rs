@@ -306,7 +306,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
 
     {
         let mut reader = interface.lock_reader();
-        reader.set_word_break_chars(" \t\n#\"'(),:;@[\\]`{}");
+        reader.set_word_break_chars(" \t\n'(),:;@[\\]`{}");
         reader.set_string_chars("\"");
         reader.set_blink_matching_paren(true);
     }
@@ -393,9 +393,56 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             }])
         } else {
             let ctx = thread_context();
-            complete_name(word, ctx.scope())
-                .map(|words| words.into_iter().map(Completion::simple).collect())
+
+            // complete names
+            let mut words = complete_name(word, ctx.scope()).unwrap_or_else(Vec::default);
+
+            // complete paths
+            let mut path_word = word;
+            if path_word.starts_with("#p\"") {
+                path_word = &path_word[3..];
+            }
+            if path_word.ends_with("\"") {
+                path_word = &path_word[..word.len()-1];
+            }
+
+            if let Ok(path) = util::expand_path(path_word) {
+                if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
+                    if let Some(parent_path) = path.parent() {
+                        words.extend(self.complete_paths(ctx, parent_path, filename_prefix));
+                    }
+                }
+            }
+
+            if words.len() > 0 {
+                Some(words.into_iter().map(Completion::simple).collect())
+            } else {
+                None
+            }
         }
+    }
+}
+
+impl KnoshCompleter {
+    fn complete_paths(&self, ctx: Context, parent_path: &Path, filename_prefix: &str) -> Vec<String> {
+        let interp = Interpreter::with_context(ctx);
+        let mut words = Vec::new();
+
+        if let Ok(siblings) = parent_path.read_dir() {
+            for sibling in siblings {
+                if let Ok(sibling) = sibling {
+                    if let Some(filename) = sibling.file_name().to_str() {
+                        if filename.starts_with(filename_prefix) {
+                            let value = Value::Path(sibling.path());
+                            let s = interp.format_value(&value);
+                            words.push(s);
+                        }
+                    }
+                }
+            }
+        }
+
+        words
     }
 }
 
