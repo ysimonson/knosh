@@ -207,13 +207,23 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
         values.pop().unwrap()
     };
 
-    let value = walk_exprs(interp, value);
+    let (value, completer) = walk_exprs(interp, value);
     let code = compile(ketos_interp.context(), &value)?;
-    ketos_interp.execute_code(Rc::new(code))
+    let value = ketos_interp.execute_code(Rc::new(code))?;
+
+    // update the master completions if this worked
+    ARGS_COMPLETER.with(move |key| {
+        let mut master_completer = key.borrow_mut();
+        master_completer.merge(completer);
+    });
+
+    Ok(value)
 }
 
 // TODO: less value cloning
-fn walk_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
+fn walk_exprs(interp: &builtins::Interpreter, value: Value) -> (Value, ArgsCompleter) {
+    let mut completer = ArgsCompleter::default();
+
     if let Value::List(ref list) = value {
         // list is never empty according to ketos docs
         debug_assert!(!list.is_empty());
@@ -229,12 +239,14 @@ fn walk_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
                     standard_names::LET | standard_names::DEFINE | standard_names::MACRO | standard_names::LAMBDA => {
                         let mut patched_list = list[..2].to_vec();
                         for value in &list[2..] {
-                            patched_list.push(walk_exprs(interp, value.clone()));
+                            let (new_value, new_completer) = walk_exprs(interp, value.clone());
+                            patched_list.push(new_value);
+                            completer.merge(new_completer);
                         }
-                        return Value::List(RcVec::new(patched_list));
+                        return (Value::List(RcVec::new(patched_list)), completer);
                     }
                     standard_names::STRUCT | standard_names::EXPORT | standard_names::USE => {
-                        return value;
+                        return (value, completer);
                     }
                     _ => ()
                 }
@@ -246,34 +258,46 @@ fn walk_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
                 // runtime panic from multiple mut borrows of a `RefCell`.
                 let proc_name = scope.add_name("proc");
                 let name_store = scope.borrow_names();
+                let first_name_str = name_store.get(*first_name).to_string();
 
                 let mut args = vec![
                     Value::Name(proc_name),
-                    Value::String(RcString::new(name_store.get(*first_name).to_string())),
+                    Value::String(RcString::new(first_name_str.clone())),
                 ];
 
                 for value in &list[1..] {
                     let new_value = match value {
                         Value::Name(name) if !is_system_fn(*name) && !is_system_operator(*name) && !scope.contains_name(*name) => {
-                            Value::String(RcString::new(name_store.get(*name).to_string()))
+                            let arg_str = name_store.get(*name).to_string();
+                            completer.add(&first_name_str, &arg_str);
+                            Value::String(RcString::new(arg_str))
                         },
-                        _ => walk_exprs(interp, value.clone())
+                        _ => {
+                            let (new_value, new_completer) = walk_exprs(interp, value.clone());
+                            completer.merge(new_completer);
+                            new_value
+                        }
                     };
 
                     args.push(new_value);
                 }
 
-                return Value::List(RcVec::new(args));
+                return (Value::List(RcVec::new(args)), completer);
             }
         }
 
-        let patched_list = list.into_iter()
+        let (new_values, new_completers): (Vec<_>, Vec<_>) = list.into_iter()
             .map(|value| walk_exprs(interp, value.clone()))
-            .collect();
-        return Value::List(RcVec::new(patched_list));
+            .unzip();
+
+        for new_completer in new_completers {
+            completer.merge(new_completer);
+        }
+
+        return (Value::List(RcVec::new(new_values)), completer);
     }
 
-    value
+    (value, completer)
 }
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
@@ -352,7 +376,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
         *key.borrow_mut() = Some(ketos_interp.context().clone());
     });
 
-    interface.set_completer(Arc::new(KnoshCompleter::default()));
+    interface.set_completer(Arc::new(KnoshCompleter));
     interface.set_report_signal(Signal::Interrupt, true);
     interface.set_report_signal(Signal::Continue, true);
     interface.set_report_signal(Signal::Resize, true);
@@ -406,12 +430,61 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Default)]
+struct ArgsCompleter(HashMap<String, BTreeMap<String, usize>>);
+
+impl ArgsCompleter {
+    fn add(&mut self, cmd: &str, arg: &str) {
+        let args = self.0.entry(cmd.to_string()).or_insert_with(BTreeMap::default);
+        let count = args.entry(arg.to_string()).or_insert(0);
+        *count += 1;
+    }
+
+    fn completions(&self, cmd: &str, word: &str) -> Vec<String> {
+        if let Some(all_args) = self.0.get(cmd) {
+            let mut candidate_args = BTreeMap::new();
+
+            for (arg, count) in all_args.range(word.to_string()..) {
+                if !arg.starts_with(word) {
+                    break;
+                }
+
+                candidate_args.entry(count)
+                    .or_insert_with(Vec::default)
+                    .push(arg);
+            }
+
+            let mut words: Vec<String> = candidate_args.values()
+                .flatten()
+                .map(|s| s.to_string())
+                .collect();
+            words.reverse();
+            words
+        } else {
+            Vec::default()
+        }
+    }
+
+    fn merge(&mut self, other: ArgsCompleter) {
+        for (other_cmd, other_args) in &other.0 {
+            let args = self.0.entry(other_cmd.to_string()).or_insert_with(BTreeMap::default);
+
+            for (other_arg, other_arg_count) in other_args.into_iter() {
+                let count = args.entry(other_arg.to_string()).or_insert(0);
+                *count += other_arg_count;
+            }
+        }
+    }
+}
+
 thread_local! {
     // linefeed requires a Completer to impl Send + Sync.
     // Because a Context object contains Rc, it does not impl these traits.
     // Therefore, we must store the Context object in thread-local storage.
     // (We only use the linefeed Interface from a single thread, anyway.)
     static CONTEXT: RefCell<Option<Context>> = RefCell::new(None);
+
+    static ARGS_COMPLETER: RefCell<ArgsCompleter> = RefCell::new(ArgsCompleter::default());
 }
 
 fn thread_context() -> Context {
@@ -422,10 +495,7 @@ fn thread_context() -> Context {
     })
 }
 
-#[derive(Default)]
-struct KnoshCompleter {
-    args: HashMap<String, BTreeMap<String, usize>>
-}
+struct KnoshCompleter;
 
 impl<Term: Terminal> Completer<Term> for KnoshCompleter {
     fn complete(
@@ -472,9 +542,12 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             // complete args
             if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit("(").next() {
                 if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
-                    if let Some(args) = self.args.get(fn_name) {
-                        words.extend(self.complete_args(args, word));
-                    }
+                    let args_completions = ARGS_COMPLETER.with(move |key| {
+                        let args_completer = key.borrow();
+                        args_completer.completions(fn_name, word)
+                    });
+
+                    words.extend(args_completions);
                 }
             }
 
@@ -505,27 +578,6 @@ impl KnoshCompleter {
             }
         }
 
-        words
-    }
-
-    fn complete_args(&self, args: &BTreeMap<String, usize>, word: &str) -> Vec<String> {
-        let mut candidates = BTreeMap::new();
-
-        for (arg, count) in args.range(word.to_string()..) {
-            if !arg.starts_with(word) {
-                break;
-            }
-
-            candidates.entry(count)
-                .or_insert_with(Vec::default)
-                .push(word);
-        }
-
-        let mut words: Vec<String> = candidates.values()
-            .flatten()
-            .map(|s| s.to_string())
-            .collect();
-        words.reverse();
         words
     }
 }
