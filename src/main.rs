@@ -459,18 +459,12 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             let mut words = complete_name(word, ctx.scope()).unwrap_or_else(Vec::default);
 
             // complete paths
-            let mut path_word = word;
-            if path_word.starts_with("#p\"") {
-                path_word = &path_word[3..];
-            }
-            if path_word.ends_with("\"") {
-                path_word = &path_word[..path_word.len()-1];
-            }
-
-            if let Ok(path) = util::expand_path(path_word) {
-                if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
+            if let Ok(path) = util::expand_path(word) {
+                if word.ends_with("/") {
+                    words.extend(self.complete_paths(&path, ""));
+                } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
                     if let Some(parent_path) = path.parent() {
-                        words.extend(self.complete_paths(ctx, parent_path, filename_prefix));
+                        words.extend(self.complete_paths(parent_path, filename_prefix));
                     }
                 }
             }
@@ -494,8 +488,7 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
 }
 
 impl KnoshCompleter {
-    fn complete_paths(&self, ctx: Context, parent_path: &Path, filename_prefix: &str) -> Vec<String> {
-        let interp = Interpreter::with_context(ctx);
+    fn complete_paths(&self, parent_path: &Path, filename_prefix: &str) -> Vec<String> {
         let mut words = Vec::new();
 
         if let Ok(siblings) = parent_path.read_dir() {
@@ -503,9 +496,9 @@ impl KnoshCompleter {
                 if let Ok(sibling) = sibling {
                     if let Some(filename) = sibling.file_name().to_str() {
                         if filename.starts_with(filename_prefix) {
-                            let value = Value::Path(sibling.path());
-                            let s = interp.format_value(&value);
-                            words.push(s);
+                            if let Some(s) = sibling.path().to_str() {
+                                words.push(s.to_string());
+                            }
                         }
                     }
                 }
