@@ -2,12 +2,11 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 use std::env;
 use std::fmt;
-use std::fs;
 use std::usize;
 use std::process;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -59,7 +58,6 @@ impl Interpreter {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
         let interp_fork = self.interp.clone();
-        let interp_reset = self.interp.clone();
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -142,7 +140,42 @@ impl Interpreter {
             }
         }));
 
-        ketos_fn! { scope => "proc" => fn process_promise(name: &OsStr, args: &[Value]) -> ChildProcessPromise }
+        scope.add_value_with_name("proc", |name| Value::new_foreign_fn(name, move |_, args| {
+            check_arity(Arity::Min(1), args.len(), name)?;
+
+            let mut iter = (&*args).iter();
+
+            let name = match iter.next().unwrap() {
+                Value::String(v) => format!("{}", v).into(),
+                Value::Bytes(v) if cfg!(unix) => {
+                    use std::os::unix::ffi::OsStringExt;
+                    let bytes = v.clone().into_bytes();
+                    OsString::from_vec(bytes)
+                },
+                Value::Path(v) => v.clone().into_os_string(),
+                _ => return Err(ketos_err(format!("cannot use non-stringifiable value as a proc name: `{:?}`", name)))
+            };
+
+            let args_str: Result<Vec<OsString>, Error> = iter
+                .map(|value| match value {
+                    Value::Bool(v) => Ok(format!("{}", v).into()),
+                    Value::Float(v) => Ok(format!("{}", v).into()),
+                    Value::Integer(v) => Ok(format!("{}", v).into()),
+                    Value::Ratio(v) => Ok(format!("{}", v).into()),
+                    Value::Char(v) => Ok(format!("{}", v).into()),
+                    Value::String(v) => Ok(format!("{}", v).into()),
+                    Value::Bytes(v) if cfg!(unix) => {
+                        use std::os::unix::ffi::OsStringExt;
+                        let bytes = v.clone().into_bytes();
+                        Ok(OsString::from_vec(bytes))
+                    },
+                    Value::Path(v) => Ok(v.clone().into_os_string()),
+                    _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
+                })
+                .collect();
+
+            Ok(ChildProcessPromise::new(name, args_str?).into())
+        }));
 
         scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(1, 4), args.len(), name)?;
@@ -281,15 +314,6 @@ impl Interpreter {
         ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<ChildProcess> {
             Ok(pipe.children())
         });
-
-        ketos_closure!(scope, "interp/reset", || -> () {
-            add_executables(&interp_reset)
-        });
-    }
-
-    pub fn add_executables(&self) -> Result<(), Error> {
-        let interp = self.interp.clone();
-        add_executables(&interp)
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -592,28 +616,6 @@ impl ChildInterpProcess {
     }
 }
 
-fn process_promise(name: &OsStr, args: &[Value]) -> Result<ChildProcessPromise, Error> {
-    let args_str: Result<Vec<OsString>, Error> = args.iter()
-        .map(|value| match value {
-            Value::Bool(v) => Ok(format!("{}", v).into()),
-            Value::Float(v) => Ok(format!("{}", v).into()),
-            Value::Integer(v) => Ok(format!("{}", v).into()),
-            Value::Ratio(v) => Ok(format!("{}", v).into()),
-            Value::Char(v) => Ok(format!("{}", v).into()),
-            Value::String(v) => Ok(format!("{}", v).into()),
-            Value::Bytes(v) if cfg!(unix) => {
-                use std::os::unix::ffi::OsStringExt;
-                let bytes = v.clone().into_bytes();
-                Ok(OsString::from_vec(bytes))
-            },
-            Value::Path(v) => Ok(v.clone().into_os_string()),
-            _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
-        })
-        .collect();
-
-    Ok(ChildProcessPromise::new(name.to_os_string(), args_str?).into())
-}
-
 fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
     if arity.accepts(len as u32) {
         Ok(())
@@ -641,50 +643,4 @@ fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
         2 => Ok(process::Stdio::null()),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }
-}
-
-fn add_executables(interp: &KetosInterpreter) -> Result<(), Error> {
-    let scope = interp.scope();
-    let mut added = HashSet::new();
-
-    let path = env::var("PATH").map_err(|err| {
-        ketos_err(format!("`PATH` environment variable is not set or not valid unicode: {}", err))
-    })?;
-
-    for dirpath in path.split(":") {
-        let entries = fs::read_dir(dirpath).map_err(|err| {
-            ketos_err(format!("could not read dir `{}`: {}", dirpath, err))
-        })?;
-
-        for entry in entries {
-            let entry = entry.map_err(|err| {
-                ketos_err(format!("error iterating over `{}`: {}", dirpath, err))
-            })?;
-
-            let filepath = entry.path().into_os_string();
-
-            let metadata = entry.metadata().map_err(|err| {
-                ketos_err(format!("could not get metadata for `{:?}`: {}", filepath, err))
-            })?;
-
-            // TODO: check if executable as well?
-            if !metadata.is_file() {
-                continue;
-            }
-        
-            if let Ok(name) = entry.file_name().into_string() {
-                if added.contains(&name) {
-                    continue;
-                }
-
-                scope.add_value_with_name(&name, |name| Value::new_foreign_fn(name, move |_, args| {
-                    Ok(process_promise(&filepath, args)?.into())
-                }));
-
-                added.insert(name);
-            }
-        }
-    }
-
-    Ok(())
 }

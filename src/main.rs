@@ -29,9 +29,10 @@ use ketos::{
     complete_name, Builder, Context, Error, FromValueRef, Interpreter,
     ParseError, ParseErrorKind, RestrictConfig, Value
 };
+use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::compile::compile;
 use ketos::io::{IoError, IoMode};
-use ketos::rc_vec::RcVec;
+use ketos::rc_vec::{RcString, RcVec};
 use linefeed::{
     Command, Completer, Completion, Function, Interface, Prompter, ReadResult,
     Signal, Suffix, Terminal,
@@ -68,8 +69,6 @@ struct KnoshOpts {
     restrict: Option<String>,
     #[options(no_short, help = "Do not run ~/.knoshrc.ket on startup")]
     no_rc: bool,
-    #[options(no_short, help = "Do not inject files in `PATH` as shortcut functions")]
-    no_path_fns: bool,
 }
 
 fn run() -> i32 {
@@ -117,13 +116,6 @@ fn run() -> i32 {
 
     let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
-
-    if !opts.no_path_fns {
-        if let Err(err) = interp.add_executables() {
-            display_error(&interp, &err);
-            return 1;
-        }
-    }
 
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
@@ -215,8 +207,73 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
         values.pop().unwrap()
     };
 
+    let value = walk_exprs(interp, value);
     let code = compile(ketos_interp.context(), &value)?;
     ketos_interp.execute_code(Rc::new(code))
+}
+
+// TODO: less value cloning
+fn walk_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
+    if let Value::List(ref list) = value {
+        // list is never empty according to ketos docs
+        debug_assert!(!list.is_empty());
+
+        if let Some(Value::Name(ref first_name)) = list.first() {
+            let ketos_interp = interp.interp.clone();
+            let scope = ketos_interp.scope();
+
+            if is_system_operator(*first_name) {
+                // These system operators need special handling because they
+                // support lists where the first value can be a bare name
+                match *first_name {
+                    standard_names::LET | standard_names::DEFINE | standard_names::MACRO | standard_names::LAMBDA => {
+                        let mut patched_list = list[..2].to_vec();
+                        for value in &list[2..] {
+                            patched_list.push(walk_exprs(interp, value.clone()));
+                        }
+                        return Value::List(RcVec::new(patched_list));
+                    }
+                    standard_names::STRUCT | standard_names::EXPORT | standard_names::USE => {
+                        return value;
+                    }
+                    _ => ()
+                }
+            } else if !is_system_fn(*first_name) && !scope.contains_name(*first_name) {
+                // Looks like this expr is shaped like a function call, to a
+                // function that does not exist. Change this into a call to
+                // `proc`.
+                // Note: `proc_name` set before `name_store` to prevent a
+                // runtime panic from multiple mut borrows of a `RefCell`.
+                let proc_name = scope.add_name("proc");
+                let name_store = scope.borrow_names();
+
+                let mut args = vec![
+                    Value::Name(proc_name),
+                    Value::String(RcString::new(name_store.get(*first_name).to_string())),
+                ];
+
+                for value in &list[1..] {
+                    let new_value = match value {
+                        Value::Name(name) if !is_system_fn(*name) && !is_system_operator(*name) && !scope.contains_name(*name) => {
+                            Value::String(RcString::new(name_store.get(*name).to_string()))
+                        },
+                        _ => walk_exprs(interp, value.clone())
+                    };
+
+                    args.push(new_value);
+                }
+
+                return Value::List(RcVec::new(args));
+            }
+        }
+
+        let patched_list = list.into_iter()
+            .map(|value| walk_exprs(interp, value.clone()))
+            .collect();
+        return Value::List(RcVec::new(patched_list));
+    }
+
+    value
 }
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
@@ -407,7 +464,7 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
                 path_word = &path_word[3..];
             }
             if path_word.ends_with("\"") {
-                path_word = &path_word[..word.len()-1];
+                path_word = &path_word[..path_word.len()-1];
             }
 
             if let Ok(path) = util::expand_path(path_word) {
