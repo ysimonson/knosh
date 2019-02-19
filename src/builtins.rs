@@ -33,12 +33,18 @@ use crate::util;
 
 pub struct Interpreter {
     pub interp: Rc<KetosInterpreter>,
+    pub proc_name: Name,
     traps: [Rc<TrapMap>; 5],
     is_root: bool,
 }
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
+        let proc_name = {
+            let scope = interp.scope();
+            scope.add_name("proc")
+        };
+
         let traps = [
             Rc::new(TrapMap::new("signal/continue", 0)),
             Rc::new(TrapMap::new("signal/interrupt", 1)),
@@ -49,6 +55,7 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
+            proc_name,
             traps,
             is_root,
         }
@@ -58,6 +65,7 @@ impl Interpreter {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
         let interp_fork = self.interp.clone();
+        let proc_name = self.proc_name;
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -140,12 +148,13 @@ impl Interpreter {
             }
         }));
 
-        scope.add_value_with_name("proc", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Min(1), args.len(), name)?;
+        scope.add_value(proc_name, Value::new_foreign_fn(proc_name, move |_, args| {
+            check_arity(Arity::Min(1), args.len(), proc_name)?;
 
             let mut iter = (&*args).iter();
+            let value = iter.next().unwrap();
 
-            let name = match iter.next().unwrap() {
+            let name = match value {
                 Value::String(v) => format!("{}", v).into(),
                 Value::Bytes(v) if cfg!(unix) => {
                     use std::os::unix::ffi::OsStringExt;
@@ -153,7 +162,7 @@ impl Interpreter {
                     OsString::from_vec(bytes)
                 },
                 Value::Path(v) => v.clone().into_os_string(),
-                _ => return Err(ketos_err(format!("cannot use non-stringifiable value as a proc name: `{:?}`", name)))
+                _ => return Err(ketos_err(format!("cannot use non-stringifiable value as a proc name: `{:?}`", value)))
             };
 
             let args_str: Result<Vec<OsString>, Error> = iter
