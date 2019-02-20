@@ -191,12 +191,27 @@ impl Interpreter {
 
             let mut iter = (&*args).iter();
             let p = <&ChildProcessPromise>::from_value_ref(iter.next().unwrap())?;
-            let (stdin, stdout, stderr) = match iter.collect::<Vec<&Value>>().as_slice() {
+            let stdio = iter.collect::<Vec<&Value>>();
+
+            let (stdin, stdout, stderr) = match stdio.as_slice() {
                 [] => (0, 0, 0),
                 [Value::Integer(stdout)] => (0, to_stdio_u8(stdout)?, 0),
                 [Value::Integer(stdout), Value::Integer(stderr)] => (0, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
                 [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => (to_stdio_u8(stdin)?, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
-                _ => return Err(ketos_err("expected 0-3 stdio integers"))
+                _ => {
+                    for value in &stdio {
+                        if value.type_name() != "integer" {
+                            let err = ExecError::TypeError {
+                                expected: "integer",
+                                found: value.type_name(),
+                                value: None,
+                            };
+                            return Err(err.into())
+                        }
+                    }
+
+                    unreachable!();
+                }
             };
 
             Ok(p.spawn(stdin, stdout, stderr)?.into())
@@ -228,7 +243,12 @@ impl Interpreter {
                 p.wait()?;
                 Ok(().into())
             } else {
-                Err(ketos_err("expected child process or child interp process"))
+                let err = ExecError::TypeError {
+                    expected: "child or child interp process",
+                    found: value.type_name(),
+                    value: None,
+                };
+                Err(err.into())
             }
         }));
 
