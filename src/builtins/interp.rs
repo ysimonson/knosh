@@ -1,19 +1,11 @@
 use std::borrow::Borrow;
 use std::rc::Rc;
 use std::env;
-use std::fmt;
 use std::usize;
 use std::process;
 use std::ffi::OsString;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::io;
-use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
-#[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
@@ -24,12 +16,11 @@ use ketos::value::FromValueRef;
 use linefeed::Signal;
 
 #[cfg(unix)]
-use nix::unistd::{fork, ForkResult, Pid};
-#[cfg(unix)]
-use nix::sys::wait::{waitpid, WaitStatus};
+use nix::unistd::{fork, ForkResult};
 
 use crate::error::ketos_err;
 use crate::util;
+use super::{TrapMap, ChildProcess, ChildInterpProcess, ChildProcessPromise, Pipe, PipePromise, ChildExitStatus};
 
 pub struct Interpreter {
     pub interp: Rc<KetosInterpreter>,
@@ -372,279 +363,6 @@ impl Interpreter {
     }
 }
 
-#[derive(ForeignValue, FromValueRef)]
-pub struct TrapMap {
-    name: String,
-    index: u8,
-    next_key: AtomicUsize,
-    traps: RefCell<HashMap<usize, Lambda>>
-}
-
-impl TrapMap {
-    fn new<S: Into<String>>(name: S, index: u8) -> Self {
-        Self {
-            name: name.into(),
-            index,
-            next_key: AtomicUsize::new(0),
-            traps: RefCell::new(HashMap::new()),
-        }
-    }
-
-    fn add(&self, callback: &Lambda) -> Result<usize, Error> {
-        let key = self.next_key.fetch_add(1, Ordering::Relaxed);
-        if key == usize::max_value() {
-            return Err(ketos_err("out of trap keys"));
-        }
-
-        self.traps.borrow_mut().insert(key, callback.clone());
-        Ok(key)
-    }
-
-    fn remove(&self, key: usize) -> Result<bool, Error> {
-        Ok(self.traps.borrow_mut().remove(&key).is_some())
-    }
-
-    fn get(&self) -> Vec<Lambda> {
-        // Note: interpreters consume lambdas when they're called. We need to
-        // clone the lambda at some point, so might as well do it here so we
-        // can avoid the borrow checker a bit more.
-        self.traps.borrow().values().cloned().collect()
-    }
-}
-
-impl fmt::Debug for TrapMap {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct PipePromise(RefCell<Vec<ChildProcessPromise>>);
-
-impl PipePromise {
-    fn new(children: Vec<&ChildProcessPromise>) -> Self {
-        Self { 0: RefCell::new(children.into_iter().cloned().collect()) }
-    }
-
-    pub fn run(&self) -> Result<(), Error> {
-        let pipe = self.spawn(0, 0, 0)?;
-        
-        if let Some(err) = pipe.wait().pop() {
-            Err(err)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Pipe, Error> {
-        let children = self.0.borrow_mut();
-        debug_assert!(children.len() >= 2);
-        let mut spawned_children = vec![children[0].spawn(stdin, 1, stderr)?];
-
-        for i in 1..children.len()-2 {
-            spawned_children.push(children[i].spawn(1, 1, stderr)?)
-        }
-
-        spawned_children.push(children[children.len()-1].spawn(1, stdout, stderr)?);
-        Ok(Pipe::new(spawned_children))
-    }
-}
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct Pipe {
-    children: RefCell<Vec<ChildProcess>>,
-    threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>
-}
-
-impl Pipe {
-    fn new(children: Vec<ChildProcess>) -> Self {
-        let mut threads = Vec::new();
-
-        for i in 1..children.len() {
-            let src = &children[i - 1];
-            let dest = &children[i];
-            let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
-            let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
-
-            threads.push(thread::spawn(move || {
-                match io::copy(&mut stdout, &mut stdin) {
-                    Ok(_) => Ok(()),
-                    Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-                    Err(err) => Err(err)
-                }
-            }));
-        }
-
-        Self {
-            children: RefCell::new(children),
-            threads: RefCell::new(threads)
-        }
-    }
-
-    fn children(&self) -> Vec<ChildProcess> {
-        let mut children = self.children.borrow_mut();
-        children.drain(..).collect()
-    }
-
-    fn wait(&self) -> Vec<Error> {
-        let mut threads = self.threads.borrow_mut();
-        let mut errors = Vec::new();
-
-        for t in threads.drain(..) {
-            match t.join() {
-                Ok(Err(err)) => {
-                    let err = ketos_err(format!("pipe failed: {}", err));
-                    errors.push(err);
-                },
-                Err(err) => {
-                    let err = ketos_err(format!("pipe thread panic: {:?}", err));
-                    errors.push(err);
-                },
-                Ok(_) => ()
-            }
-        }
-
-        errors
-    }
-}
-
-#[derive(Clone, Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildProcessPromise {
-    name: OsString,
-    args: Vec<OsString>
-}
-
-impl ChildProcessPromise {
-    fn new(name: OsString, args: Vec<OsString>) -> Self {
-        Self { name, args }
-    }
-
-    fn command(&self) -> process::Command {
-        let mut cmd = process::Command::new(&self.name);
-        cmd.args(self.args.iter());
-        cmd
-    }
-
-    pub fn run(&self) -> Result<(), Error> {
-        let child = self.spawn(0, 0, 0)?;
-        child.wait().map(|_| ())
-    }
-
-    fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<ChildProcess, Error> {
-        let child = self.command()
-            .stdin(to_stdio_value(stdin)?)
-            .stdout(to_stdio_value(stdout)?)
-            .stderr(to_stdio_value(stderr)?)
-            .spawn()
-            .map_err(|err| ketos_err(format!("{}", err)))?;
-        Ok(ChildProcess::new(child))
-    }
-
-    #[cfg(unix)]
-    fn exec(&self) -> Result<(), Error> {
-        let err = self.command().exec();
-        Err(ketos_err(format!("{}", err)))
-    }
-}
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildProcess(RefCell<process::Child>);
-
-impl ChildProcess {
-    fn new(child: process::Child) -> Self {
-        Self { 0: RefCell::new(child) }
-    }
-
-    fn wait(&self) -> Result<ChildExitStatus, Error> {
-        match self.0.borrow_mut().wait() {
-            Ok(status) => Ok(ChildExitStatus::new(status)),
-            Err(err) => Err(ketos_err(format!("could not wait for child: {}", err)))
-        }
-    }
-
-    fn poll(&self) -> Result<ChildExitStatus, Error> {
-        match self.0.borrow_mut().try_wait() {
-            Ok(Some(status)) => Ok(ChildExitStatus::new(status)),
-            Ok(None) => Err(ketos_err("child not finished")),
-            Err(err) => Err(ketos_err(format!("could not wait for child: {}", err)))
-        }
-    }
-
-    fn pid(&self) -> u32 {
-        self.0.borrow().id()
-    }
-
-    fn write(&self, bytes: &[u8]) -> Result<(), Error> {
-        let mut child = self.0.borrow_mut();
-        let stdin = child.stdin.as_mut().expect("failed to get child stdin");
-        stdin.write_all(bytes).map_err(|err| ketos_err(format!("could not write to child: {}", err)))
-    }
-
-    #[cfg(unix)]
-    fn stdin_fd(&self) -> i32 {
-        let child = self.0.borrow();
-        child.stdin.as_ref().expect("failed to get child stdin").as_raw_fd()
-    }
-
-    #[cfg(unix)]
-    fn stdout_fd(&self) -> i32 {
-        let child = self.0.borrow();
-        child.stdout.as_ref().expect("failed to get child stdout").as_raw_fd()
-    }
-
-    #[cfg(unix)]
-    fn stderr_fd(&self) -> i32 {
-        let child = self.0.borrow();
-        child.stderr.as_ref().expect("failed to get child stderr").as_raw_fd()
-    }
-}
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildExitStatus(pub process::ExitStatus);
-
-impl ChildExitStatus {
-    fn new(status: process::ExitStatus) -> Self {
-        Self { 0: status }
-    }
-
-    fn success(&self) -> bool {
-        self.0.success()
-    }
-
-    fn code(&self) -> Result<i32, Error> {
-        self.0.code().ok_or_else(|| ketos_err("no exit code"))
-    }
-
-    #[cfg(unix)]
-    fn signal(&self) -> Result<i32, Error> {
-        self.0.signal().ok_or_else(|| ketos_err("no exit signal"))
-    }
-}
-
-#[cfg(unix)]
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildInterpProcess(pub Pid);
-
-impl ChildInterpProcess {
-    fn new(pid: Pid) -> Self {
-        Self { 0: pid }
-    }
-
-    fn wait(&self) -> Result<(), Error> {
-        // Ideally we'd call `waitpid` once, but `nix` as of 0.13.0 doesn't
-        // support `WIFSIGNALED`, so we have to repeatedly listen for all
-        // signals
-        loop {
-            match waitpid(Some(self.0), None) {
-                Ok(WaitStatus::Exited(_, code)) if code == 0 => return Ok(()),
-                Ok(WaitStatus::Signaled(_, _, _)) => return Ok(()),
-                Ok(_) => (),
-                Err(err) => return Err(ketos_err(format!("could not wait for child interpreter: {}", err))),
-            }
-        }
-    }
-}
-
 fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
     if arity.accepts(len as u32) {
         Ok(())
@@ -661,15 +379,6 @@ fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
 fn to_stdio_u8(i: &Integer) -> Result<u8, Error> {
     match i.to_u8() {
         Some(value) if value <= 2 => Ok(value),
-        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
-    }
-}
-
-fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
-    match i {
-        0 => Ok(process::Stdio::inherit()),
-        1 => Ok(process::Stdio::piped()),
-        2 => Ok(process::Stdio::null()),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }
 }
