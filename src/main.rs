@@ -520,7 +520,13 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
 
             // complete paths
             if let Ok(path) = util::expand_path(word) {
-                if word.ends_with("/") {
+                if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with("/") {
+                    if let Ok(current_dir) = env::current_dir() {
+                        if let Some(path) = path.to_str() {
+                            words.extend(self.complete_paths(&current_dir, &path));
+                        }
+                    }
+                } else if word.ends_with("/") {
                     words.extend(self.complete_paths(&path, ""));
                 } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
                     if let Some(parent_path) = path.parent() {
