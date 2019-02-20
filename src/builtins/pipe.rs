@@ -52,8 +52,8 @@ impl Pipe {
         for i in 1..children.len() {
             let src = &children[i - 1];
             let dest = &children[i];
-            let mut stdout = src.0.borrow_mut().stdout.take().expect("expected stdout");
-            let mut stdin = dest.0.borrow_mut().stdin.take().expect("expected stdin");
+            let mut stdout = src.take_stdout().expect("expected stdout");
+            let mut stdin = dest.take_stdin().expect("expected stdin");
 
             threads.push(thread::spawn(move || {
                 match io::copy(&mut stdout, &mut stdin) {

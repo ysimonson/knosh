@@ -57,7 +57,7 @@ impl ChildProcessPromise {
 }
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildProcess(pub RefCell<process::Child>);
+pub struct ChildProcess(RefCell<process::Child>);
 
 impl ChildProcess {
     pub fn new(child: process::Child) -> Self {
@@ -106,10 +106,18 @@ impl ChildProcess {
         let child = self.0.borrow();
         child.stderr.as_ref().expect("failed to get child stderr").as_raw_fd()
     }
+
+    pub fn take_stdout(&self) -> Option<process::ChildStdout> {
+        self.0.borrow_mut().stdout.take()
+    }
+
+    pub fn take_stdin(&self) -> Option<process::ChildStdin> {
+        self.0.borrow_mut().stdin.take()
+    }
 }
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildExitStatus(pub process::ExitStatus);
+pub struct ChildExitStatus(process::ExitStatus);
 
 impl ChildExitStatus {
     pub fn new(status: process::ExitStatus) -> Self {
@@ -132,7 +140,7 @@ impl ChildExitStatus {
 
 #[cfg(unix)]
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ChildInterpProcess(pub Pid);
+pub struct ChildInterpProcess(Pid);
 
 impl ChildInterpProcess {
     pub fn new(pid: Pid) -> Self {
