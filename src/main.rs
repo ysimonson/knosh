@@ -441,7 +441,7 @@ impl ArgsCompleter {
         *count += 1;
     }
 
-    fn completions(&self, cmd: &str, word: &str) -> Vec<String> {
+    fn completions(&self, cmd: &str, word: &str) -> Vec<Completion> {
         if let Some(all_args) = self.0.get(cmd) {
             let mut candidate_args = BTreeMap::new();
 
@@ -455,12 +455,12 @@ impl ArgsCompleter {
                     .push(arg);
             }
 
-            let mut words: Vec<String> = candidate_args.values()
+            let mut completions: Vec<Completion> = candidate_args.values()
                 .flatten()
-                .map(|s| s.to_string())
+                .map(|s| Completion::simple(s.to_string()))
                 .collect();
-            words.reverse();
-            words
+            completions.reverse();
+            completions
         } else {
             Vec::default()
         }
@@ -516,21 +516,25 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             let ctx = thread_context();
 
             // complete names
-            let mut words = complete_name(word, ctx.scope()).unwrap_or_else(Vec::default);
+            let mut completions: Vec<Completion> = complete_name(word, ctx.scope())
+                .unwrap_or_else(Vec::default)
+                .into_iter()
+                .map(|w| Completion::simple(w))
+                .collect();
 
             // complete paths
             if let Ok(path) = util::expand_path(word) {
                 if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with("/") {
                     if let Ok(current_dir) = env::current_dir() {
                         if let Some(path) = path.to_str() {
-                            words.extend(self.complete_paths(&current_dir, &path));
+                            completions.extend(self.complete_paths(&current_dir, &path));
                         }
                     }
                 } else if word.ends_with("/") {
-                    words.extend(self.complete_paths(&path, ""));
+                    completions.extend(self.complete_paths(&path, ""));
                 } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
                     if let Some(parent_path) = path.parent() {
-                        words.extend(self.complete_paths(parent_path, filename_prefix));
+                        completions.extend(self.complete_paths(parent_path, filename_prefix));
                     }
                 }
             }
@@ -543,12 +547,12 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
                         args_completer.completions(fn_name, word)
                     });
 
-                    words.extend(args_completions);
+                    completions.extend(args_completions);
                 }
             }
 
-            if words.len() > 0 {
-                Some(words.into_iter().map(Completion::simple).collect())
+            if completions.len() > 0 {
+                Some(completions)
             } else {
                 None
             }
@@ -557,7 +561,7 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
 }
 
 impl KnoshCompleter {
-    fn complete_paths(&self, parent_path: &Path, filename_prefix: &str) -> Vec<String> {
+    fn complete_paths(&self, parent_path: &Path, filename_prefix: &str) -> Vec<Completion> {
         let mut words = Vec::new();
 
         if let Ok(siblings) = parent_path.read_dir() {
@@ -566,7 +570,11 @@ impl KnoshCompleter {
                     if let Some(filename) = sibling.file_name().to_str() {
                         if filename.starts_with(filename_prefix) {
                             if let Some(s) = sibling.path().to_str() {
-                                words.push(s.to_string());
+                                words.push(Completion {
+                                    completion: s.to_string(),
+                                    display: None,
+                                    suffix: Suffix::None,
+                                });
                             }
                         }
                     }
