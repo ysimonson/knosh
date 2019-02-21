@@ -201,10 +201,9 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
     // Automatically insert parens if they're not explicitly put
-    let input_value = if values.len() > 1 {
-        Value::List(RcVec::new(values))
-    } else {
-        values.pop().unwrap()
+    let input_value = match values.as_slice() {
+        [Value::List(_)] => values.pop().unwrap(),
+        _ => Value::List(RcVec::new(values))
     };
 
     let input_value = rewrite_commands(interp, input_value);
