@@ -125,8 +125,27 @@ fn run() -> i32 {
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
     if let Some(ref expr) = opts.expr {
-        if !run_exprs(&interp, &expr, None) && !interactive {
-            return 1;
+        if !interactive {
+            match execute_exprs(&interp, &expr, None) {
+                Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                    if let Err(err) = p.run() {
+                        display_error(&interp, "", &err);
+                        return 1;
+                    }
+                } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
+                    if let Err(err) = p.run() {
+                        display_error(&interp, "", &err);
+                        return 1;
+                    }
+                } else {
+                    interp.interp.clone().display_value(&value);
+                },
+                Ok(None) => {},
+                Err(err) => {
+                    display_error(&interp, "", &err);
+                    return 1;
+                }
+            };
         }
     } else if !opts.free.is_empty() {
         interp.interp.clone().set_args(&opts.free);
@@ -193,12 +212,12 @@ fn parse_param<T: FromStr>(name: &str, value: &str) -> Result<T, String> {
         .map_err(|_| format!("invalid `{}` value: {}", name, value))
 }
 
-fn display_error(interp: &builtins::Interpreter, e: &Error) {
+fn display_error(interp: &builtins::Interpreter, prefix: &str, err: &Error) {
     let ketos_interp = interp.interp.clone();
     if let Some(trace) = ketos_interp.take_traceback() {
         ketos_interp.display_trace(&trace);
     }
-    ketos_interp.display_error(e);
+    eprintln!("{}{}", prefix, ketos_interp.format_error(err));
 }
 
 fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<Value>, Error> {
@@ -309,28 +328,6 @@ fn update_command_completions(interp: &builtins::Interpreter, completer: &mut Ar
     }
 }
 
-fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
-    let err = match execute_exprs(interp, exprs, path) {
-        Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
-            p.run()
-        } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
-            p.run()
-        } else {
-            interp.interp.clone().display_value(&value);
-            Ok(())
-        },
-        Ok(None) => Ok(()),
-        Err(err) => Err(err)
-    };
-
-    if let Err(err) = err {
-        display_error(&interp, &err);
-        false
-    } else {
-        true
-    }
-}
-
 /// Executes a ketos file. This does not use ketos' built-in `run_file`
 /// because we do some pre-processing before shipping it off to the
 /// interpreter.
@@ -341,20 +338,21 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
         Ok(file) => file,
         Err(err) => {
             let err = Error::IoError(IoError::new(IoMode::Open, path, err));
-            display_error(interp, &err);
+            display_error(interp, "", &err);
             return false;
         }
     };
 
-    let lines = BufReader::new(file).lines();
+    let lines: Vec<Result<String, io::Error>> = BufReader::new(file).lines().collect();
+    let line_count = lines.len();
     let mut buf = String::new();
 
-    for line in lines {
+    for (i, line) in lines.into_iter().enumerate() {
         let line = match line {
             Ok(line) => line,
             Err(err) => {
                 let err = Error::IoError(IoError::new(IoMode::Read, path, err));
-                display_error(interp, &err);
+                display_error(interp, "", &err);
                 return false;
             }
         };
@@ -362,20 +360,33 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
         buf.push_str(&line);
         buf.push('\n');
 
-        if is_parseable(&buf) {
-            if !run_exprs(interp, &buf, path_str.clone()) {
-                return false;
-            }
+        if is_parseable(&buf) || i == line_count - 1 {
+            let error_prefix = format!("line {}: ", i + 1);
+
+            match execute_exprs(interp, &buf, path_str.clone()) {
+                Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                    if let Err(err) = p.run_suppressed() {
+                        display_error(&interp, &error_prefix, &err);
+                        return false;
+                    }
+                } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
+                    if let Err(err) = p.run_suppressed() {
+                        display_error(&interp, &error_prefix, &err);
+                        return false;
+                    }
+                }
+                Ok(None) => {},
+                Err(err) => {
+                    display_error(&interp, &error_prefix, &err);
+                    return false;
+                }
+            };
 
             buf = String::new();
         }
     }
 
-    if !buf.is_empty() {
-        run_exprs(interp, &buf, path_str.clone())
-    } else {
-        true
-    }
+    true
 }
 
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
@@ -412,14 +423,32 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
             ReadResult::Input(mut line) => {
                 interface.add_history(line.clone());
                 line.push('\n');
-                run_exprs(interp, &line, None);
+
+                match execute_exprs(interp, &line, None) {
+                    Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                        if let Err(err) = p.run() {
+                            display_error(&interp, "", &err);
+                        }
+                    } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
+                        if let Err(err) = p.run() {
+                            display_error(&interp, "", &err);
+                        }
+                    } else {
+                        interp.interp.clone().display_value(&value);
+                    },
+                    Ok(None) => {},
+                    Err(err) => {
+                        display_error(&interp, "", &err);
+                    }
+                };
+
                 ketos_interp.clear_codemap();
             }
             ReadResult::Signal(sig) => {
                 for result in interp.trigger_signal(sig) {
                     match result {
                         Ok(value) => ketos_interp.display_value(&value),
-                        Err(err) => display_error(&interp, &err),
+                        Err(err) => display_error(&interp, "", &err),
                     }
                 }
 

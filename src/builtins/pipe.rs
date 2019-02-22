@@ -25,6 +25,16 @@ impl PipePromise {
         }
     }
 
+    pub fn run_suppressed(&self) -> Result<(), Error> {
+        let pipe = self.spawn(2, 2, 2)?;
+        
+        if let Some(err) = pipe.wait().pop() {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Pipe, Error> {
         let children = self.0.borrow_mut();
         debug_assert!(children.len() >= 2);
