@@ -601,11 +601,22 @@ impl KnoshCompleter {
         if let Ok(siblings) = parent_path.read_dir() {
             for sibling in siblings {
                 if let Ok(sibling) = sibling {
-                    if let Some(filename) = sibling.file_name().to_str() {
-                        if filename.starts_with(filename_prefix) {
-                            if let Some(s) = sibling.path().to_str() {
+                    if let Some(sibling_filename) = sibling.file_name().to_str() {
+                        if sibling_filename.starts_with(filename_prefix) {
+                            if let Some(sibling_path) = sibling.path().to_str() {
+                                let is_dir = match sibling.file_type() {
+                                    Ok(t) => t.is_dir(),
+                                    Err(_) => false
+                                };
+
+                                let completion = if is_dir {
+                                    format!("{}/", sibling_path)
+                                } else {
+                                    sibling_path.to_string()
+                                };
+
                                 words.push(Completion {
-                                    completion: s.to_string(),
+                                    completion: completion,
                                     display: None,
                                     suffix: Suffix::None,
                                 });
