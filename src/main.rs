@@ -117,6 +117,11 @@ fn run() -> i32 {
     let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
 
+    CONTEXT.with(|key| {
+        let ketos_interp = interp.interp.clone();
+        *key.borrow_mut() = Some(ketos_interp.context().clone());
+    });
+
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
     if let Some(ref expr) = opts.expr {
@@ -196,9 +201,13 @@ fn display_error(interp: &builtins::Interpreter, e: &Error) {
     ketos_interp.display_error(e);
 }
 
-fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Value, Error> {
+fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<Value>, Error> {
     let ketos_interp = interp.interp.clone();
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
+
+    if values.len() == 0 {
+        return Ok(None);
+    }
 
     // Automatically insert parens if they're not explicitly put
     let input_value = match values.as_slice() {
@@ -216,7 +225,7 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
         update_command_completions(interp, &mut completer, &input_value);
     });
 
-    Ok(output_value)
+    Ok(Some(output_value))
 }
 
 fn rewrite_commands(interp: &builtins::Interpreter, value: Value) -> Value {
@@ -302,14 +311,15 @@ fn update_command_completions(interp: &builtins::Interpreter, completer: &mut Ar
 
 fn run_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> bool {
     let err = match execute_exprs(interp, exprs, path) {
-        Ok(value) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+        Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
             p.run()
         } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
             p.run()
         } else {
             interp.interp.clone().display_value(&value);
             Ok(())
-        }
+        },
+        Ok(None) => Ok(()),
         Err(err) => Err(err)
     };
 
@@ -371,10 +381,6 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
     let ketos_interp = interp.interp.clone();
-
-    CONTEXT.with(|key| {
-        *key.borrow_mut() = Some(ketos_interp.context().clone());
-    });
 
     interface.set_completer(Arc::new(KnoshCompleter));
     interface.set_report_signal(Signal::Interrupt, true);
@@ -603,10 +609,6 @@ fn is_parseable(text: &str) -> bool {
     let interp = Interpreter::with_context(thread_context());
     let r = interp.parse_exprs(text, None);
     interp.clear_codemap();
-
-    if text.chars().all(|c| c.is_whitespace()) {
-        return false;
-    }
 
     match r {
         Err(Error::ParseError(ParseError {
