@@ -23,7 +23,7 @@ use crate::util;
 use super::{TrapMap, ChildProcess, ChildInterpProcess, ChildProcessPromise, Pipe, PipePromise, ChildExitStatus};
 
 pub struct Interpreter {
-    pub interp: Rc<KetosInterpreter>,
+    interp: Rc<KetosInterpreter>,
     pub proc_name: Name,
     traps: [Rc<TrapMap>; 5],
     is_root: bool,
@@ -50,6 +50,10 @@ impl Interpreter {
             traps,
             is_root,
         }
+    }
+
+    pub fn inner(&self) -> Rc<KetosInterpreter> {
+        self.interp.clone()
     }
 
     pub fn add_builtins(&self) {

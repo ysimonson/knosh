@@ -118,7 +118,7 @@ fn run() -> i32 {
     interp.add_builtins();
 
     CONTEXT.with(|key| {
-        let ketos_interp = interp.interp.clone();
+        let ketos_interp = interp.inner();
         *key.borrow_mut() = Some(ketos_interp.context().clone());
     });
 
@@ -138,7 +138,7 @@ fn run() -> i32 {
                         return 1;
                     }
                 } else {
-                    interp.interp.clone().display_value(&value);
+                    interp.inner().display_value(&value);
                 },
                 Ok(None) => {},
                 Err(err) => {
@@ -148,7 +148,7 @@ fn run() -> i32 {
             };
         }
     } else if !opts.free.is_empty() {
-        interp.interp.clone().set_args(&opts.free);
+        interp.inner().set_args(&opts.free);
 
         if !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
             return 1;
@@ -213,7 +213,7 @@ fn parse_param<T: FromStr>(name: &str, value: &str) -> Result<T, String> {
 }
 
 fn display_error(interp: &builtins::Interpreter, prefix: &str, err: &Error) {
-    let ketos_interp = interp.interp.clone();
+    let ketos_interp = interp.inner();
     if let Some(trace) = ketos_interp.take_traceback() {
         ketos_interp.display_trace(&trace);
     }
@@ -221,7 +221,7 @@ fn display_error(interp: &builtins::Interpreter, prefix: &str, err: &Error) {
 }
 
 fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<Value>, Error> {
-    let ketos_interp = interp.interp.clone();
+    let ketos_interp = interp.inner();
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
     if values.len() == 0 {
@@ -248,7 +248,7 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
 }
 
 fn rewrite_commands(interp: &builtins::Interpreter, value: Value) -> Value {
-    let ketos_interp = interp.interp.clone();
+    let ketos_interp = interp.inner();
     let scope = ketos_interp.scope();
 
     match value {
@@ -391,7 +391,7 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
-    let ketos_interp = interp.interp.clone();
+    let ketos_interp = interp.inner();
 
     interface.set_completer(Arc::new(KnoshCompleter));
     interface.set_report_signal(Signal::Interrupt, true);
@@ -434,7 +434,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
                             display_error(&interp, "", &err);
                         }
                     } else {
-                        interp.interp.clone().display_value(&value);
+                        interp.inner().display_value(&value);
                     },
                     Ok(None) => {},
                     Err(err) => {
