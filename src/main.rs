@@ -116,10 +116,8 @@ fn run() -> i32 {
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
     if let Some(ref expr) = opts.expr {
-        if !interactive {
-            if !print_execution_result(&interp, None, &expr, "", None) {
-                return 1;
-            }
+        if !interactive && !print_execution_result(&interp, None, &expr, "", None) {
+            return 1;
         }
     } else if !opts.free.is_empty() {
         interp.inner().set_args(&opts.free);
@@ -326,7 +324,7 @@ pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<
                     match (first_value, second_value) {
                         (Some(Value::Name(first_name)), Some(Value::String(cmd))) if first_name == &interp.proc_name => {
                             // This seems to be a proc call - process the arguments
-                            while let Some(value) = iter.next() {
+                            for value in iter {
                                 if let Value::String(arg) = value {
                                     completer.add_arg(&cmd, &arg);
                                 }

@@ -47,18 +47,18 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             let mut completions: Vec<Completion> = complete_name(word, ctx.scope())
                 .unwrap_or_else(Vec::default)
                 .into_iter()
-                .map(|w| Completion::simple(w))
+                .map(Completion::simple)
                 .collect();
 
             // complete paths
             if let Ok(path) = util::expand_path(word) {
-                if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with("/") {
+                if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with('/') {
                     if let Ok(current_dir) = env::current_dir() {
                         if let Some(path) = path.to_str() {
                             completions.extend(self.complete_paths(&current_dir, &path));
                         }
                     }
-                } else if word.ends_with("/") {
+                } else if word.ends_with('/') {
                     completions.extend(self.complete_paths(&path, ""));
                 } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
                     if let Some(parent_path) = path.parent() {
@@ -68,13 +68,13 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             }
 
             // complete args
-            if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit("(").next() {
+            if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit('(').next() {
                 if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
                     completions.extend(self.complete_args(fn_name, word));
                 }
             }
 
-            if completions.len() > 0 {
+            if !completions.is_empty() {
                 Some(completions)
             } else {
                 None
@@ -105,7 +105,7 @@ impl KnoshCompleter {
                                 };
 
                                 words.push(Completion {
-                                    completion: completion,
+                                    completion,
                                     display: None,
                                     suffix: Suffix::None,
                                 });

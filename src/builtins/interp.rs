@@ -230,7 +230,7 @@ impl Interpreter {
                 let mut errors = p.wait();
 
                 if let Some(err) = errors.pop() {
-                    Err(err.into())
+                    Err(err)
                 } else {
                     Ok(().into())
                 }
@@ -326,7 +326,7 @@ impl Interpreter {
         scope.add_value_with_name("|", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Min(2), args.len(), name)?;
 
-            let ps: Result<Vec<&ProcPromise>, ExecError> = args.into_iter()
+            let ps: Result<Vec<&ProcPromise>, ExecError> = args.iter_mut()
                 .map(|arg| {
                     <&ProcPromise>::from_value_ref(arg)
                 })

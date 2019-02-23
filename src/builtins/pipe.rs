@@ -30,8 +30,8 @@ impl PipePromise {
         debug_assert!(children.len() >= 2);
         let mut spawned_children = vec![children[0].spawn(stdin, 1, stderr)?];
 
-        for i in 1..children.len()-2 {
-            spawned_children.push(children[i].spawn(1, 1, stderr)?)
+        for child in children.iter().take(children.len()-2).skip(1) {
+            spawned_children.push(child.spawn(1, 1, stderr)?)
         }
 
         spawned_children.push(children[children.len()-1].spawn(1, stdout, stderr)?);

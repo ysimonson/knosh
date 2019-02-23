@@ -24,7 +24,7 @@ pub fn shrink_path(mut path: PathBuf, max_len: u8) -> OsString {
                     d.to_os_string()
                 } else {
                     match d.to_str() {
-                        Some(s) if s.len() > 0 => s.chars().next().unwrap().to_string().into(),
+                        Some(s) if !s.is_empty() => s.chars().next().unwrap().to_string().into(),
                         _ => d.to_os_string()
                     }
                 }

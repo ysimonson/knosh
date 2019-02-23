@@ -11,7 +11,7 @@ pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) 
     let ketos_interp = interp.inner();
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
-    if values.len() == 0 {
+    if values.is_empty() {
         return Ok(None);
     }
 
