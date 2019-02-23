@@ -6,7 +6,7 @@ This is lisp-ey shell replacement, with a few ~~hacks~~features bolted on to mak
 
 Underlying knosh is [ketos](https://github.com/murarth/ketos), a minimalistic lisp designed for easy embedding. Knosh also uses the excellent [linefeed](https://github.com/murarth/linefeed) crate (by the same author!) so the repl offers all the ergonomics you've come to expect out of bash - autocomplete, reverse-i-search, history, etc.
 
-Knosh is not meant to be a backwards-compatible replacement to existing shell languages, though most of the commands you're used to running in bash work mostly the same.
+Knosh is not meant to be a backwards-compatible replacement to existing shell languages, though most of the commands you're used to running in bash work the same.
 
 The name in shorthand for the [knolling](https://en.wikipedia.org/wiki/Tom_Sachs_\(artist\)#Knolling) shell. Or maybe the ketos non-shell.
 
@@ -77,14 +77,14 @@ API:
 * `(| p1:ChildProcessPromise, ..., pn:ChildProcessPromise) -> PipePromise`: Creates a promise to execute a pipe with the given proc promises.
 * `(spawn p:PipePromise [stdio]) -> Pipe`: Executes a proc promise with the given stdio, returning a handle to the pipe. `stdio` is the same as those documented above for procs.
 * `(wait p:PipePromise)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
-* `(pipe/children)`: Returns the member procs of the pipe.
+* `(pipe/children p:Pipe)`: Returns the member procs of the pipe.
 
 ## Subinterps
 
 You can spawn subinterps:
 
 ```
-(fork (lambda () (println "hi")))
+(fork (lambda () (println "hello from a subinterp")))
 ```
 
 This forks the current shell and executes the given function. The calling shell is given back a subinterp handle.
