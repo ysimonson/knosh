@@ -11,32 +11,26 @@ extern crate nix;
 mod builtins;
 mod error;
 mod util;
+mod tui;
 
-use std::cell::RefCell;
 use std::env;
 use std::io::{self, stderr, Write, BufRead, BufReader};
-use std::iter::repeat;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::fs::File;
 use std::rc::Rc;
-use std::collections::{HashMap, BTreeMap};
 
 use gumdrop::{Options, ParsingStyle};
-use ketos::{
-    complete_name, Builder, Context, Error, FromValueRef, Interpreter,
-    ParseError, ParseErrorKind, RestrictConfig, Value
-};
+use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::compile::compile;
 use ketos::io::{IoError, IoMode};
 use ketos::rc_vec::{RcString, RcVec};
-use linefeed::{
-    Command, Completer, Completion, Function, Interface, Prompter, ReadResult,
-    Signal, Suffix, Terminal,
-};
+use linefeed::{Command, Interface, ReadResult, Signal};
+
+use crate::tui::{KnoshAccept, is_parseable, ArgsCompleter, KnoshCompleter};
 
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 
@@ -117,9 +111,9 @@ fn run() -> i32 {
     let interp = builtins::Interpreter::new(builder.finish(), true);
     interp.add_builtins();
 
-    CONTEXT.with(|key| {
+    tui::set_thread_context({
         let ketos_interp = interp.inner();
-        *key.borrow_mut() = Some(ketos_interp.context().clone());
+        ketos_interp.context().clone()
     });
 
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
@@ -239,7 +233,7 @@ fn execute_exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<Strin
     let output_value = ketos_interp.execute_code(Rc::new(code))?;
 
     // update the completions
-    ARGS_COMPLETER.with(move |key| {
+    tui::ARGS_COMPLETER.with(move |key| {
         let mut completer = key.borrow_mut();
         update_command_completions(interp, &mut completer, &input_value);
     });
@@ -463,212 +457,6 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     println!();
 
     Ok(())
-}
-
-#[derive(Default)]
-struct ArgsCompleter(HashMap<String, BTreeMap<String, usize>>);
-
-impl ArgsCompleter {
-    fn add(&mut self, cmd: &str, arg: &str) {
-        let args = self.0.entry(cmd.to_string()).or_insert_with(BTreeMap::default);
-        let count = args.entry(arg.to_string()).or_insert(0);
-        *count += 1;
-    }
-
-    fn completions(&self, cmd: &str, word: &str) -> Vec<Completion> {
-        if let Some(all_args) = self.0.get(cmd) {
-            let mut candidate_args = BTreeMap::new();
-
-            for (arg, count) in all_args.range(word.to_string()..) {
-                if !arg.starts_with(word) {
-                    break;
-                }
-
-                candidate_args.entry(count)
-                    .or_insert_with(Vec::default)
-                    .push(arg);
-            }
-
-            let mut completions: Vec<Completion> = candidate_args.values()
-                .flatten()
-                .map(|s| Completion::simple(s.to_string()))
-                .collect();
-            completions.reverse();
-            completions
-        } else {
-            Vec::default()
-        }
-    }
-}
-
-thread_local! {
-    // linefeed requires a Completer to impl Send + Sync.
-    // Because a Context object contains Rc, it does not impl these traits.
-    // Therefore, we must store the Context object in thread-local storage.
-    // (We only use the linefeed Interface from a single thread, anyway.)
-    static CONTEXT: RefCell<Option<Context>> = RefCell::new(None);
-
-    static ARGS_COMPLETER: RefCell<ArgsCompleter> = RefCell::new(ArgsCompleter::default());
-}
-
-fn thread_context() -> Context {
-    CONTEXT.with(|key| {
-        key.borrow()
-            .clone()
-            .unwrap_or_else(|| panic!("no thread-local Context object set"))
-    })
-}
-
-struct KnoshCompleter;
-
-impl<Term: Terminal> Completer<Term> for KnoshCompleter {
-    fn complete(
-        &self,
-        word: &str,
-        prompter: &Prompter<Term>,
-        start: usize,
-        end: usize,
-    ) -> Option<Vec<Completion>> {
-        let line_start = prompter.buffer()[..start]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
-        let is_whitespace = prompter.buffer()[line_start..start]
-            .chars()
-            .all(|ch| ch.is_whitespace());
-
-        if is_whitespace && start == end {
-            // Indent when there's no word to complete
-            let n = 2 - (start - line_start) % 2;
-
-            Some(vec![Completion {
-                completion: repeat(' ').take(n).collect(),
-                display: None,
-                suffix: Suffix::None,
-            }])
-        } else {
-            let ctx = thread_context();
-
-            // complete names
-            let mut completions: Vec<Completion> = complete_name(word, ctx.scope())
-                .unwrap_or_else(Vec::default)
-                .into_iter()
-                .map(|w| Completion::simple(w))
-                .collect();
-
-            // complete paths
-            if let Ok(path) = util::expand_path(word) {
-                if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with("/") {
-                    if let Ok(current_dir) = env::current_dir() {
-                        if let Some(path) = path.to_str() {
-                            completions.extend(self.complete_paths(&current_dir, &path));
-                        }
-                    }
-                } else if word.ends_with("/") {
-                    completions.extend(self.complete_paths(&path, ""));
-                } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
-                    if let Some(parent_path) = path.parent() {
-                        completions.extend(self.complete_paths(parent_path, filename_prefix));
-                    }
-                }
-            }
-
-            // complete args
-            if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit("(").next() {
-                if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
-                    let args_completions = ARGS_COMPLETER.with(move |key| {
-                        let args_completer = key.borrow();
-                        args_completer.completions(fn_name, word)
-                    });
-
-                    completions.extend(args_completions);
-                }
-            }
-
-            if completions.len() > 0 {
-                Some(completions)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-impl KnoshCompleter {
-    fn complete_paths(&self, parent_path: &Path, filename_prefix: &str) -> Vec<Completion> {
-        let mut words = Vec::new();
-
-        if let Ok(siblings) = parent_path.read_dir() {
-            for sibling in siblings {
-                if let Ok(sibling) = sibling {
-                    if let Some(sibling_filename) = sibling.file_name().to_str() {
-                        if sibling_filename.starts_with(filename_prefix) {
-                            if let Some(sibling_path) = sibling.path().to_str() {
-                                let is_dir = match sibling.file_type() {
-                                    Ok(t) => t.is_dir(),
-                                    Err(_) => false
-                                };
-
-                                let completion = if is_dir {
-                                    format!("{}/", sibling_path)
-                                } else {
-                                    sibling_path.to_string()
-                                };
-
-                                words.push(Completion {
-                                    completion: completion,
-                                    display: None,
-                                    suffix: Suffix::None,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        words
-    }
-}
-
-struct KnoshAccept;
-
-impl<Term: Terminal> Function<Term> for KnoshAccept {
-    fn execute(&self, prompter: &mut Prompter<Term>, count: i32, _ch: char) -> io::Result<()> {
-        if is_parseable(prompter.buffer()) {
-            prompter.accept_input()
-        } else if count > 0 {
-            prompter.insert(count as usize, '\n')
-        } else {
-            Ok(())
-        }
-    }
-}
-
-fn is_parseable(text: &str) -> bool {
-    let interp = Interpreter::with_context(thread_context());
-    let r = interp.parse_exprs(text, None);
-    interp.clear_codemap();
-
-    match r {
-        Err(Error::ParseError(ParseError {
-            kind: ParseErrorKind::MissingCloseParen,
-            ..
-        }))
-        | Err(Error::ParseError(ParseError {
-            kind: ParseErrorKind::UnterminatedComment,
-            ..
-        }))
-        | Err(Error::ParseError(ParseError {
-            kind: ParseErrorKind::UnterminatedString,
-            ..
-        }))
-        | Err(Error::ParseError(ParseError {
-            kind: ParseErrorKind::DocCommentEof,
-            ..
-        })) => false,
-        Ok(_) | Err(_) => true,
-    }
 }
 
 fn print_restrict_usage() {
