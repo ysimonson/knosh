@@ -310,6 +310,8 @@ pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<
                     display_error(&interp, error_prefix, &err);
                     return false;
                 }
+            } else if let Value::Unit = output_value {
+                // don't print anything
             } else {
                 interp.inner().display_value(&output_value);
             }
