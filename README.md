@@ -42,7 +42,11 @@ Tab completions work on:
 * Paths
 * Proc args (e.g. `-l` on `ls`, if you've run `ls -l` before.)
 
-## Procs
+## Builtins
+
+Beyond ketos' [standard operators](https://github.com/murarth/ketos/blob/master/docs/operators.md) and [system functions](https://github.com/murarth/ketos/blob/master/docs/functions.md), knosh offers builtins to support all the goodies you'd typically expect out of a shell.
+
+### Procs
 
 Procs are child processes in knosh. You kickstart procs like so:
 
@@ -80,7 +84,7 @@ Values:
 * `stdio/piped`: A value that specifies that a process should pipe the stdio.
 * `stdio/null`: A value that specifies that a process should suppress the stdio.
 
-## Pipes
+### Pipes
 
 Procs can also be piped like so:
 
@@ -99,7 +103,7 @@ Functions:
 * `(wait p:Pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
 * `(pipe/children p:Pipe)`: Returns the member procs of the pipe.
 
-## Subinterps
+### Subinterps
 
 You can spawn subinterps:
 
@@ -113,20 +117,20 @@ Functions:
 * `(fork callback:lambda) -> SubInterp`: Forks the process and executes the given function in the child shell. The parent shell is given back a subinterp handle.
 * `(wait i:SubInterp)`: Waits for a subinterp to finish, returning its exit status.
 
-## Environment variables
+### Environment variables
 
 Functions:
 * `(set-env name:string value:string)`: Sets an environment variable.
 * `(env name:string) -> string`: Gets an environment variable.
 * `(del-env name:string)`: Deletes an environment variable.
 
-## Paths
+### Paths
 
 Functions:
 * `(cd dir:string) -> string`: Changes the current working directory and returns the new absolute path.
 * `(pwd) -> string`: Returns the current working directory as an absolute path.
 
-## Traps
+### Traps
 
 **Note:** At the moment, traps only work in the repl, and cannot be used from executing scripts.
 
@@ -141,7 +145,7 @@ Values:
 * `signal/resize`: A value representing `SIGWINCH` (window resize.)
 * `signal/suspend`: A value representing `SIGTSTP`.
 
-## Other builtins
+### Other
 
 Functions:
 * `(exit code:integer)`: exits the shell with the given code
