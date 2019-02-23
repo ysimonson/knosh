@@ -20,7 +20,7 @@ use nix::unistd::{fork, ForkResult};
 
 use crate::error::ketos_err;
 use crate::util;
-use super::{TrapMap, ChildProcess, ChildInterpProcess, ChildProcessPromise, Pipe, PipePromise, ChildExitStatus};
+use super::{TrapMap, Proc, SubInterp, ProcPromise, Pipe, PipePromise, ExitStatus};
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
@@ -128,7 +128,7 @@ impl Interpreter {
 
             match fork() {
                 Ok(ForkResult::Parent { child, .. }) => {
-                    Ok(ChildInterpProcess::new(child).into())
+                    Ok(SubInterp::new(child).into())
                 },
                 Ok(ForkResult::Child) => {
                     let lambda = Value::Lambda(callback.clone());
@@ -178,14 +178,14 @@ impl Interpreter {
                 })
                 .collect();
 
-            Ok(ChildProcessPromise::new(name, args_str?).into())
+            Ok(ProcPromise::new(name, args_str?).into())
         }));
 
         scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Range(1, 4), args.len(), name)?;
 
             let mut iter = (&*args).iter();
-            let p = <&ChildProcessPromise>::from_value_ref(iter.next().unwrap())?;
+            let p = <&ProcPromise>::from_value_ref(iter.next().unwrap())?;
             let stdio = iter.collect::<Vec<&Value>>();
 
             let (stdin, stdout, stderr) = match stdio.as_slice() {
@@ -213,7 +213,7 @@ impl Interpreter {
         }));
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exec", |cmd: &ChildProcessPromise| -> () {
+        ketos_closure!(scope, "exec", |cmd: &ProcPromise| -> () {
             cmd.exec()
         });
 
@@ -223,7 +223,7 @@ impl Interpreter {
             let mut iter = (&*args).iter();
             let value = iter.next().unwrap();
 
-            if let Ok(p) = <&ChildProcess>::from_value_ref(value) {
+            if let Ok(p) = <&Proc>::from_value_ref(value) {
                 p.wait()?;
                 Ok(().into())
             } else if let Ok(p) = <&Pipe>::from_value_ref(value) {
@@ -234,7 +234,7 @@ impl Interpreter {
                 } else {
                     Ok(().into())
                 }
-            } else if let Ok(p) = <&ChildInterpProcess>::from_value_ref(value) {
+            } else if let Ok(p) = <&SubInterp>::from_value_ref(value) {
                 p.wait()?;
                 Ok(().into())
             } else {
@@ -247,7 +247,7 @@ impl Interpreter {
             }
         }));
 
-        ketos_closure!(scope, "poll", |child: &ChildProcess| -> ChildExitStatus {
+        ketos_closure!(scope, "poll", |child: &Proc| -> ExitStatus {
             child.poll()
         });
 
@@ -257,14 +257,14 @@ impl Interpreter {
             let mut iter = (&*args).iter();
 
             if let Some(value) = iter.next() {
-                let child = <&ChildProcess>::from_value_ref(value)?;
+                let child = <&Proc>::from_value_ref(value)?;
                 Ok(child.pid().into())
             } else {
                 Ok(process::id().into())
             }
         }));
 
-        ketos_closure!(scope, "write", |child: &ChildProcess, bytes: &[u8]| -> () {
+        ketos_closure!(scope, "write", |child: &Proc, bytes: &[u8]| -> () {
             child.write(bytes)
         });
 
@@ -275,7 +275,7 @@ impl Interpreter {
             let mut iter = (&*args).iter();
 
             if let Some(value) = iter.next() {
-                let child = <&ChildProcess>::from_value_ref(value)?;
+                let child = <&Proc>::from_value_ref(value)?;
                 Ok(child.stdin_fd().into())
             } else {
                 Ok(io::stdin().as_raw_fd().into())
@@ -289,7 +289,7 @@ impl Interpreter {
             let mut iter = (&*args).iter();
 
             if let Some(value) = iter.next() {
-                let child = <&ChildProcess>::from_value_ref(value)?;
+                let child = <&Proc>::from_value_ref(value)?;
                 Ok(child.stdout_fd().into())
             } else {
                 Ok(io::stdout().as_raw_fd().into())
@@ -303,39 +303,39 @@ impl Interpreter {
             let mut iter = (&*args).iter();
 
             if let Some(value) = iter.next() {
-                let child = <&ChildProcess>::from_value_ref(value)?;
+                let child = <&Proc>::from_value_ref(value)?;
                 Ok(child.stderr_fd().into())
             } else {
                 Ok(io::stderr().as_raw_fd().into())
             }
         }));
 
-        ketos_closure!(scope, "exit/success?", |status: &ChildExitStatus| -> bool {
+        ketos_closure!(scope, "exit/success?", |status: &ExitStatus| -> bool {
             Ok(status.success())
         });
 
-        ketos_closure!(scope, "exit/code", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit/code", |status: &ExitStatus| -> i32 {
             status.code()
         });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exit/signal", |status: &ChildExitStatus| -> i32 {
+        ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> i32 {
             status.signal()
         });
 
         scope.add_value_with_name("|", |name| Value::new_foreign_fn(name, move |_, args| {
             check_arity(Arity::Min(2), args.len(), name)?;
 
-            let ps: Result<Vec<&ChildProcessPromise>, ExecError> = args.into_iter()
+            let ps: Result<Vec<&ProcPromise>, ExecError> = args.into_iter()
                 .map(|arg| {
-                    <&ChildProcessPromise>::from_value_ref(arg)
+                    <&ProcPromise>::from_value_ref(arg)
                 })
                 .collect();
 
             Ok(PipePromise::new(ps?).into())
         }));
 
-        ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<ChildProcess> {
+        ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<Proc> {
             Ok(pipe.children())
         });
     }

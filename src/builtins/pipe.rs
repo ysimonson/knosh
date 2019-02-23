@@ -5,13 +5,13 @@ use std::thread;
 use ketos::Error;
 
 use crate::error::ketos_err;
-use super::{ChildProcess, ChildProcessPromise};
+use super::{Proc, ProcPromise};
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct PipePromise(RefCell<Vec<ChildProcessPromise>>);
+pub struct PipePromise(RefCell<Vec<ProcPromise>>);
 
 impl PipePromise {
-    pub fn new(children: Vec<&ChildProcessPromise>) -> Self {
+    pub fn new(children: Vec<&ProcPromise>) -> Self {
         Self { 0: RefCell::new(children.into_iter().cloned().collect()) }
     }
 
@@ -51,12 +51,12 @@ impl PipePromise {
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct Pipe {
-    children: RefCell<Vec<ChildProcess>>,
+    children: RefCell<Vec<Proc>>,
     threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>
 }
 
 impl Pipe {
-    pub fn new(children: Vec<ChildProcess>) -> Self {
+    pub fn new(children: Vec<Proc>) -> Self {
         let mut threads = Vec::new();
 
         for i in 1..children.len() {
@@ -80,7 +80,7 @@ impl Pipe {
         }
     }
 
-    pub fn children(&self) -> Vec<ChildProcess> {
+    pub fn children(&self) -> Vec<Proc> {
         let mut children = self.children.borrow_mut();
         children.drain(..).collect()
     }

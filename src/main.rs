@@ -127,7 +127,7 @@ fn run() -> i32 {
     if let Some(ref expr) = opts.expr {
         if !interactive {
             match execute_exprs(&interp, &expr, None) {
-                Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
                     if let Err(err) = p.run() {
                         display_error(&interp, "", &err);
                         return 1;
@@ -364,7 +364,7 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
             let error_prefix = format!("line {}: ", i + 1);
 
             match execute_exprs(interp, &buf, path_str.clone()) {
-                Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
                     if let Err(err) = p.run_suppressed() {
                         display_error(&interp, &error_prefix, &err);
                         return false;
@@ -425,7 +425,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
                 line.push('\n');
 
                 match execute_exprs(interp, &line, None) {
-                    Ok(Some(value)) => if let Ok(p) = <&builtins::ChildProcessPromise>::from_value_ref(&value) {
+                    Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
                         if let Err(err) = p.run() {
                             display_error(&interp, "", &err);
                         }

@@ -47,23 +47,23 @@ This actually returns a _promise_ to a child process, which can then be resolved
 3) You can pass it to `exec`, which will replace the shell with the specified proc; e.g. `(exec (proc "ls" "-l"))` will exec `ls -l`.
 
 Functions:
-* `(proc name:string, arg1:stringifiable, ..., argn:stringifiable) -> ChildProcessPromise`: Creates a promise to execute a process with the given `name` and arguments; e.g. `(proc "ls" "-l")` returns a promise to execute `ls -l`.
-* `(spawn p:ChildProcessPromise [stdio]) -> ChildProcess`: Executes a proc promise with the given stdio, returning a handle to the proc. `stdio` is zero to three arguments:
+* `(proc name:string, arg1:stringifiable, ..., argn:stringifiable) -> ProcPromise`: Creates a promise to execute a process with the given `name` and arguments; e.g. `(proc "ls" "-l")` returns a promise to execute `ls -l`.
+* `(spawn p:ProcPromise [stdio]) -> Proc`: Executes a proc promise with the given stdio, returning a handle to the proc. `stdio` is zero to three arguments:
   * If it's zero arguments, the process inherits the shell's stdio
   * If it's one argument, it specifies the process' stdout, and the process inherits the shell's stdin and stderr.
   * If it's two arguments, it specifies the process' stdout and stderr, and the process inherits the shell's stdin.
   * If it's three arguments, it specifies the process' stdin, stdout, and stderr in that order.
-* `(exec p:ChildProcessPromise)`: Execs a promise, replacing the shell's process with the specified one.
-* `(wait p:ChildProcess) -> ChildExitStatus`: Waits for a proc to finish, returning its exit status.
-* `(poll p:ChildProcess) -> ChildExitStatus`: Polls for the proc status. If the proc has finished, the exit status is returned. Otherwise this throws an error.
-* `(exit/success? s:ChildExitStatus) -> bool`: Returns whether the proc exit status is considered successful.
-* `(exit/code s:ChildExitStatus) -> integer`: Gets the exit status code of the proc.
-* `(exit/signal s:ChildExitStatus) -> integer`: If the proc was terminated by a signal, this returns that signal. Otherwise it throws an error.
-* `(pid p:ChildProcess) -> integer`: Returns the proc's pid.
-* `(write p:ChildProcess, bytes:bytestring)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
-* `(stdin/fd p:ChildProcess) -> integer`: Returns the proc's stdin fd.
-* `(stdout/fd p:ChildProcess) -> integer`: Returns the proc's stdout fd.
-* `(stderr/fd p:ChildProcess) -> integer`: Returns the proc's stderr fd.
+* `(exec p:ProcPromise)`: Execs a promise, replacing the shell's process with the specified one.
+* `(wait p:Proc) -> ExitStatus`: Waits for a proc to finish, returning its exit status.
+* `(poll p:Proc) -> ExitStatus`: Polls for the proc status. If the proc has finished, the exit status is returned. Otherwise this throws an error.
+* `(exit/success? s:ExitStatus) -> bool`: Returns whether the proc exit status is considered successful.
+* `(exit/code s:ExitStatus) -> integer`: Gets the exit status code of the proc.
+* `(exit/signal s:ExitStatus) -> integer`: If the proc was terminated by a signal, this returns that signal. Otherwise it throws an error.
+* `(pid p:Proc) -> integer`: Returns the proc's pid.
+* `(write p:Proc, bytes:bytestring)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
+* `(stdin/fd p:Proc) -> integer`: Returns the proc's stdin fd.
+* `(stdout/fd p:Proc) -> integer`: Returns the proc's stdout fd.
+* `(stderr/fd p:Proc) -> integer`: Returns the proc's stderr fd.
 
 Values:
 * `stdio/inherit`: A value that specifies that a process should inherit the stdio from the shell.
@@ -84,7 +84,7 @@ Similar to procs, this returns a _promise_ to a pipe, and can be resolved in two
 2) You can pass it to `spawn`, which allows you to control the pipe's stdio and interact with it; e.g. `(spawn (| (ls -l) (grep foo)) (stdio/null stdio/null stdio/null))` would run `ls -l` but suppress the output.
 
 Functions:
-* `(| p1:ChildProcessPromise, ..., pn:ChildProcessPromise) -> PipePromise`: Creates a promise to execute a pipe with the given proc promises.
+* `(| p1:ProcPromise, ..., pn:ProcPromise) -> PipePromise`: Creates a promise to execute a pipe with the given proc promises.
 * `(spawn p:PipePromise [stdio]) -> Pipe`: Executes a proc promise with the given stdio, returning a handle to the pipe. `stdio` is the same as those documented above for procs.
 * `(wait p:PipePromise)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
 * `(pipe/children p:Pipe)`: Returns the member procs of the pipe.
@@ -100,8 +100,8 @@ You can spawn subinterps:
 This forks the current shell and executes the given function. The calling shell is given back a subinterp handle.
 
 Functions:
-* `(fork callback:lambda) -> ChildInterpProcess`: Forks the process and executes the given function in the child shell. The parent shell is given back a subinterp handle.
-* `(wait i:ChildInterpProcess)`: Waits for a subinterp to finish, returning its exit status.
+* `(fork callback:lambda) -> SubInterp`: Forks the process and executes the given function in the child shell. The parent shell is given back a subinterp handle.
+* `(wait i:SubInterp)`: Waits for a subinterp to finish, returning its exit status.
 
 ## Environment variables
 
