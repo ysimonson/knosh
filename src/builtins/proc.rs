@@ -33,11 +33,6 @@ impl ProcPromise {
         child.wait().map(|_| ())
     }
 
-    pub fn run_suppressed(&self) -> Result<(), Error> {
-        let child = self.spawn(2, 2, 2)?;
-        child.wait().map(|_| ())
-    }
-
     pub fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Proc, Error> {
         let child = self.command()
             .stdin(to_stdio_value(stdin)?)
