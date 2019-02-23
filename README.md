@@ -2,7 +2,7 @@
 
 Keeping the spirit of the lisp machine alive in a frankensteinian combination sh and lisp.
 
-This is lisp-ey shell replacement, with a few ~~hacks~~features bolted on to make it usable as a daily driver. The goal is to have about the same level of productivity as bash, but at the same time allow you to scale up the lines of code without your script turning into a giant bag of string-escaping mush.
+This is lisp-ey shell replacement, with a few ~~hacks~~features bolted on to make it more usable as a daily driver. The goal is to have about the same level of productivity as bash, but at the same time allow you to scale up the lines of code without your script turning into a giant bag of string-escaping mush.
 
 Underlying knosh is [ketos](https://github.com/murarth/ketos), a minimalistic lisp designed for easy embedding. Knosh also uses the excellent [linefeed](https://github.com/murarth/linefeed) crate (by the same author!) so the repl offers all the ergonomics you've come to expect out of bash - autocomplete, reverse-i-search, history, etc.
 
@@ -21,8 +21,6 @@ In order to save keystrokes, knosh walks the AST at evaluation time and makes a 
 1) Input expressions are automatically wrapped in parens if they don't have them already, so `cd "foo"` becomes `(cd "foo")`.
 2) If the first argument in a list does not refer to a known function, it's automatically converted into a call to run a process, so `ls` becomes `(proc "ls")`.
 3) If any other argument in the list does not refer to a known name, it's automatically converted into a string, which allows it to act as an argument to a proc. So `ls -l` becomes `(proc "ls" "-l")`.
-
-Additionally, procs that are returned bare to the repl (i.e. not bound to a variable) are automatically evaluated, inheriting the shell's stdio. You can actually just run `ls -l` (no parens, no proc, no quoting, etc.) in knosh and it'll work as expected.
 
 ## Procs
 
