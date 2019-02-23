@@ -1,7 +1,7 @@
-use std::cell::RefCell;
 use std::env;
 use std::iter::repeat;
 use std::path::Path;
+use std::sync::Mutex;
 use std::collections::{HashMap, BTreeMap};
 
 use ketos::complete_name;
@@ -10,47 +10,10 @@ use linefeed::{Completer, Completion, Prompter, Suffix, Terminal};
 use super::context::thread_context;
 use crate::util;
 
-thread_local! {
-    pub static ARGS_COMPLETER: RefCell<ArgsCompleter> = RefCell::new(ArgsCompleter::default());
-}
-
 #[derive(Default)]
-pub struct ArgsCompleter(HashMap<String, BTreeMap<String, usize>>);
-
-impl ArgsCompleter {
-    pub fn add(&mut self, cmd: &str, arg: &str) {
-        let args = self.0.entry(cmd.to_string()).or_insert_with(BTreeMap::default);
-        let count = args.entry(arg.to_string()).or_insert(0);
-        *count += 1;
-    }
-
-    pub fn completions(&self, cmd: &str, word: &str) -> Vec<Completion> {
-        if let Some(all_args) = self.0.get(cmd) {
-            let mut candidate_args = BTreeMap::new();
-
-            for (arg, count) in all_args.range(word.to_string()..) {
-                if !arg.starts_with(word) {
-                    break;
-                }
-
-                candidate_args.entry(count)
-                    .or_insert_with(Vec::default)
-                    .push(arg);
-            }
-
-            let mut completions: Vec<Completion> = candidate_args.values()
-                .flatten()
-                .map(|s| Completion::simple(s.to_string()))
-                .collect();
-            completions.reverse();
-            completions
-        } else {
-            Vec::default()
-        }
-    }
+pub struct KnoshCompleter {
+    args: Mutex<HashMap<String, BTreeMap<String, usize>>>
 }
-
-pub struct KnoshCompleter;
 
 impl<Term: Terminal> Completer<Term> for KnoshCompleter {
     fn complete(
@@ -107,12 +70,7 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
             // complete args
             if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit("(").next() {
                 if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
-                    let args_completions = ARGS_COMPLETER.with(move |key| {
-                        let args_completer = key.borrow();
-                        args_completer.completions(fn_name, word)
-                    });
-
-                    completions.extend(args_completions);
+                    completions.extend(self.complete_args(fn_name, word));
                 }
             }
 
@@ -159,5 +117,40 @@ impl KnoshCompleter {
         }
 
         words
+    }
+
+    fn complete_args(&self, cmd: &str, word: &str) -> Vec<Completion> {
+        let args = self.args.lock().unwrap();
+        let cmd_args = args.get(cmd);
+
+        if let Some(all_args) = cmd_args {
+            let mut candidate_args = BTreeMap::new();
+
+            for (arg, count) in all_args.range(word.to_string()..) {
+                if !arg.starts_with(word) {
+                    break;
+                }
+
+                candidate_args.entry(count)
+                    .or_insert_with(Vec::default)
+                    .push(arg);
+            }
+
+            let mut completions: Vec<Completion> = candidate_args.values()
+                .flatten()
+                .map(|s| Completion::simple(s.to_string()))
+                .collect();
+            completions.reverse();
+            completions
+        } else {
+            Vec::default()
+        }
+    }
+
+    pub fn add_arg(&self, cmd: &str, arg: &str) {
+        let mut args = self.args.lock().unwrap();
+        let cmd_args = args.entry(cmd.to_string()).or_insert_with(BTreeMap::default);
+        let count = cmd_args.entry(arg.to_string()).or_insert(0);
+        *count += 1;
     }
 }

@@ -23,7 +23,7 @@ use std::time::Duration;
 use std::fs::File;
 
 use gumdrop::{Options, ParsingStyle};
-use ketos::{Builder, Error, FromValueRef, RestrictConfig};
+use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use ketos::io::{IoError, IoMode};
 use linefeed::{Command, Interface, ReadResult, Signal};
 
@@ -117,26 +117,9 @@ fn run() -> i32 {
 
     if let Some(ref expr) = opts.expr {
         if !interactive {
-            match executor::exprs(&interp, &expr, None) {
-                Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
-                    if let Err(err) = p.run() {
-                        display_error(&interp, "", &err);
-                        return 1;
-                    }
-                } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
-                    if let Err(err) = p.run() {
-                        display_error(&interp, "", &err);
-                        return 1;
-                    }
-                } else {
-                    interp.inner().display_value(&value);
-                },
-                Ok(None) => {},
-                Err(err) => {
-                    display_error(&interp, "", &err);
-                    return 1;
-                }
-            };
+            if !print_execution_result(&interp, None, &expr, "", None) {
+                return 1;
+            }
         }
     } else if !opts.free.is_empty() {
         interp.inner().set_args(&opts.free);
@@ -245,26 +228,9 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 
         if is_parseable(&buf) || i == line_count - 1 {
             let error_prefix = format!("line {}: ", i + 1);
-
-            match executor::exprs(interp, &buf, path_str.clone()) {
-                Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
-                    if let Err(err) = p.run_suppressed() {
-                        display_error(&interp, &error_prefix, &err);
-                        return false;
-                    }
-                } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
-                    if let Err(err) = p.run_suppressed() {
-                        display_error(&interp, &error_prefix, &err);
-                        return false;
-                    }
-                }
-                Ok(None) => {},
-                Err(err) => {
-                    display_error(&interp, &error_prefix, &err);
-                    return false;
-                }
-            };
-
+            if !print_execution_result(interp, None, &buf, &error_prefix, path_str.clone()) {
+                return false;
+            }
             buf = String::new();
         }
     }
@@ -275,8 +241,9 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
     let ketos_interp = interp.inner();
+    let completer = Arc::new(KnoshCompleter::default());
 
-    interface.set_completer(Arc::new(KnoshCompleter));
+    interface.set_completer(completer.clone());
     interface.set_report_signal(Signal::Interrupt, true);
     interface.set_report_signal(Signal::Continue, true);
     interface.set_report_signal(Signal::Resize, true);
@@ -306,25 +273,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
             ReadResult::Input(mut line) => {
                 interface.add_history(line.clone());
                 line.push('\n');
-
-                match executor::exprs(interp, &line, None) {
-                    Ok(Some(value)) => if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&value) {
-                        if let Err(err) = p.run() {
-                            display_error(&interp, "", &err);
-                        }
-                    } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&value) {
-                        if let Err(err) = p.run() {
-                            display_error(&interp, "", &err);
-                        }
-                    } else {
-                        interp.inner().display_value(&value);
-                    },
-                    Ok(None) => {},
-                    Err(err) => {
-                        display_error(&interp, "", &err);
-                    }
-                };
-
+                print_execution_result(interp, Some(completer.clone()), &line, "", None);
                 ketos_interp.clear_codemap();
             }
             ReadResult::Signal(sig) => {
@@ -346,6 +295,54 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     println!();
 
     Ok(())
+}
+
+pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<Arc<tui::KnoshCompleter>>, line: &str, error_prefix: &str, path: Option<String>) -> bool {
+    match executor::exprs(interp, line, path) {
+        Ok(Some((input_value, output_value))) => {
+            if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&output_value) {
+                if let Err(err) = p.run() {
+                    display_error(&interp, error_prefix, &err);
+                    return false;
+                }
+            } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&output_value) {
+                if let Err(err) = p.run() {
+                    display_error(&interp, error_prefix, &err);
+                    return false;
+                }
+            } else {
+                interp.inner().display_value(&output_value);
+            }
+
+            // Update the args completer
+            if let Some(completer) = completer {
+                if let Value::List(list) = input_value {
+                    let mut iter = list.iter();
+                    let first_value = iter.next();
+                    let second_value = iter.next();
+
+                    match (first_value, second_value) {
+                        (Some(Value::Name(first_name)), Some(Value::String(cmd))) if first_name == &interp.proc_name => {
+                            // This seems to be a proc call - process the arguments
+                            while let Some(value) = iter.next() {
+                                if let Value::String(arg) = value {
+                                    completer.add_arg(&cmd, &arg);
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+            }
+
+            true
+        },
+        Ok(None) => true,
+        Err(err) => {
+            display_error(&interp, error_prefix, &err);
+            false
+        }
+    }
 }
 
 fn print_restrict_usage() {

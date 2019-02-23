@@ -6,9 +6,8 @@ use ketos::compile::compile;
 use ketos::rc_vec::{RcString, RcVec};
 
 use crate::builtins;
-use crate::tui::{self, ArgsCompleter};
 
-pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<Value>, Error> {
+pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<(Value, Value)>, Error> {
     let ketos_interp = interp.inner();
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
@@ -26,13 +25,7 @@ pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) 
     let code = compile(ketos_interp.context(), &input_value)?;
     let output_value = ketos_interp.execute_code(Rc::new(code))?;
 
-    // update the completions
-    tui::ARGS_COMPLETER.with(move |key| {
-        let mut completer = key.borrow_mut();
-        update_command_completions(interp, &mut completer, &input_value);
-    });
-
-    Ok(Some(output_value))
+    Ok(Some((input_value, output_value)))
 }
 
 fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
@@ -93,25 +86,5 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
             Value::String(RcString::new(arg_str))
         }
         _ => value
-    }
-}
-
-fn update_command_completions(interp: &builtins::Interpreter, completer: &mut ArgsCompleter, value: &Value) {
-    if let Value::List(list) = value {
-        let mut iter = list.iter();
-        let first_value = iter.next();
-        let second_value = iter.next();
-
-        match (first_value, second_value) {
-            (Some(Value::Name(first_name)), Some(Value::String(cmd))) if first_name == &interp.proc_name => {
-                // This seems to be a proc call - process the arguments
-                while let Some(value) = iter.next() {
-                    if let Value::String(arg) = value {
-                        completer.add(&cmd, &arg);
-                    }
-                }
-            },
-            _ => {}
-        }
     }
 }
