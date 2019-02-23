@@ -8,6 +8,16 @@ Underlying knosh is [ketos](https://github.com/murarth/ketos), a minimalistic li
 
 The name in shorthand for the [knolling](https://en.wikipedia.org/wiki/Tom_Sachs_\(artist\)#Knolling) shell. Or maybe the ketos non-shell.
 
+## Installation
+
+Install rust, then run:
+
+```
+git clone git@github.com:ysimonson/knosh.git
+cd knosh
+cargo install --path .
+```
+
 ## Language
 
 Knosh uses ketos. See its [docs](https://github.com/murarth/ketos/tree/master/docs) for more information on the underlying language.
