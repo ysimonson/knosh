@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use ketos::compile::compile;
 use ketos::name::{is_system_fn, is_system_operator, standard_names};
-use ketos::rc_vec::{RcString, RcVec};
 use ketos::{Error, Value};
 
 use crate::builtins;
@@ -22,7 +21,7 @@ pub fn exprs(
     // Automatically insert parens if they're not explicitly put
     let input_value = match values.as_slice() {
         [Value::List(_)] => values.pop().unwrap(),
-        _ => Value::List(RcVec::new(values)),
+        _ => values.into(),
     };
 
     let input_value = rewrite_exprs(interp, input_value);
@@ -74,8 +73,8 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
                     new_list.push(Value::Name(interp.proc_name));
                     new_list.push({
                         let name_store = scope.borrow_names();
-                        let first_name_str = name_store.get(first_name).to_string();
-                        Value::String(RcString::new(first_name_str.clone()))
+                        let first_name_str = name_store.get(first_name);
+                        first_name_str.into()
                     });
                 } else {
                     new_list.push(first_value);
@@ -85,12 +84,12 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
             }
 
             new_list.extend(iter.map(|value| rewrite_exprs(interp, value)));
-            Value::List(RcVec::new(new_list))
+            new_list.into()
         }
         Value::Name(name) if !is_system_fn(name) && !is_system_operator(name) && !scope.contains_name(name) => {
             let name_store = scope.borrow_names();
-            let arg_str = name_store.get(name).to_string();
-            Value::String(RcString::new(arg_str))
+            let arg_str = name_store.get(name);
+            arg_str.into()
         }
         _ => value,
     }
