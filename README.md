@@ -145,7 +145,7 @@ Values:
 * `signal/resize`: A value representing `SIGWINCH` (window resize.)
 * `signal/suspend`: A value representing `SIGTSTP`.
 
-### Other
+### Shell management
 
 Functions:
 * `(exit code:integer)`: exits the shell with the given code
