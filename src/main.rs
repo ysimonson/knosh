@@ -205,19 +205,19 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
         }
     };
 
-    let mut lines: Vec<Result<String, io::Error>> = BufReader::new(file).lines().collect();
-    let line_count = lines.len();
+    let mut lines = BufReader::new(file).lines().enumerate().peekable();
 
-    if let Some(Ok(first_line)) = lines.get(0) {
+    if let Some((_, Ok(first_line))) = lines.peek() {
         // ignore shebangs
         if first_line.starts_with("#!") {
-            lines.remove(0).unwrap();
+            lines.next();
         }
     }
 
     let mut buf = String::new();
+    let mut j = 0;
 
-    for (i, line) in lines.into_iter().enumerate() {
+    for (i, line) in lines {
         let line = match line {
             Ok(line) => line,
             Err(err) => {
@@ -230,12 +230,24 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
         buf.push_str(&line);
         buf.push('\n');
 
-        if is_parseable(&buf) || i == line_count - 1 {
+        if is_parseable(&buf) {
             let error_prefix = format!("line {}: ", i + 1);
             if !print_execution_result(interp, None, &buf, &error_prefix, path_str.clone()) {
                 return false;
             }
             buf = String::new();
+        } else {
+            // this might be the last line, in which case we want to save the
+            // line number for error reporting
+            j = i;
+        }
+    }
+
+    // this ensures that the last line is still processed
+    if !buf.is_empty() {
+        let error_prefix = format!("line {}: ", j + 1);
+        if !print_execution_result(interp, None, &buf, &error_prefix, path_str.clone()) {
+            return false;
         }
     }
 
