@@ -113,6 +113,8 @@ fn run() -> i32 {
         ketos_interp.context().clone()
     });
 
+    interp.inner().set_args(&opts.free);
+
     let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
 
     if let Some(ref expr) = opts.expr {
@@ -120,8 +122,6 @@ fn run() -> i32 {
             return 1;
         }
     } else if !opts.free.is_empty() {
-        interp.inner().set_args(&opts.free);
-
         if !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
             return 1;
         }
@@ -205,8 +205,16 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
         }
     };
 
-    let lines: Vec<Result<String, io::Error>> = BufReader::new(file).lines().collect();
+    let mut lines: Vec<Result<String, io::Error>> = BufReader::new(file).lines().collect();
     let line_count = lines.len();
+
+    if let Some(Ok(first_line)) = lines.get(0) {
+        // ignore shebangs
+        if first_line.starts_with("#!") {
+            lines.remove(0).unwrap();
+        }
+    }
+
     let mut buf = String::new();
 
     for (i, line) in lines.into_iter().enumerate() {
