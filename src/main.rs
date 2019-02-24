@@ -27,7 +27,7 @@ use ketos::io::{IoError, IoMode};
 use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use linefeed::{Command, Interface, ReadResult, Signal};
 
-use crate::tui::{is_parseable, KnoshAccept, KnoshCompleter};
+use crate::tui::{is_parseable, Accepter, Completer};
 
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 
@@ -37,7 +37,7 @@ fn main() {
 }
 
 #[derive(Options)]
-struct KnoshOpts {
+struct Opts {
     #[options(free)]
     free: Vec<String>,
 
@@ -66,7 +66,7 @@ fn run() -> i32 {
     let args = std::env::args().collect::<Vec<_>>();
 
     // Allow arguments that appear to be options to be passed to scripts
-    let opts = match KnoshOpts::parse_args(&args[1..], ParsingStyle::StopAtFirstFree) {
+    let opts = match Opts::parse_args(&args[1..], ParsingStyle::StopAtFirstFree) {
         Ok(opts) => opts,
         Err(e) => {
             let _ = writeln!(stderr(), "{}: {}", args[0], e);
@@ -81,7 +81,7 @@ fn run() -> i32 {
     if opts.help {
         println!("Usage: {} [OPTIONS] [FILE] [ARGS]", args[0]);
         println!();
-        println!("{}", KnoshOpts::usage());
+        println!("{}", Opts::usage());
         return 0;
     }
 
@@ -130,7 +130,7 @@ fn run() -> i32 {
     if interactive {
         if !opts.no_rc {
             if let Some(p) = dirs::home_dir() {
-                let rc = p.join(".knoshrc.ket");
+                let rc = p.join(".knoshrc");
                 if rc.is_file() {
                     // Do not bail on error in interactive mode
                     run_file(&interp, &rc);
@@ -237,7 +237,7 @@ fn run_file(interp: &builtins::Interpreter, path: &Path) -> bool {
 fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     let interface = Interface::new("knosh")?;
     let ketos_interp = interp.inner();
-    let completer = Arc::new(KnoshCompleter::default());
+    let completer = Arc::new(Completer::default());
 
     interface.set_completer(completer.clone());
     interface.set_report_signal(Signal::Interrupt, true);
@@ -245,9 +245,9 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     interface.set_report_signal(Signal::Resize, true);
     interface.set_report_signal(Signal::Suspend, true);
     interface.set_report_signal(Signal::Quit, true);
-    interface.define_function("knosh-accept", Arc::new(KnoshAccept));
-    interface.bind_sequence("\r", Command::from_str("knosh-accept"));
-    interface.bind_sequence("\n", Command::from_str("knosh-accept"));
+    interface.define_function("knosh-accepter", Arc::new(Accepter));
+    interface.bind_sequence("\r", Command::from_str("knosh-accepter"));
+    interface.bind_sequence("\n", Command::from_str("knosh-accepter"));
 
     {
         let mut reader = interface.lock_reader();
@@ -293,7 +293,7 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
 
 pub fn print_execution_result(
     interp: &builtins::Interpreter,
-    completer: Option<Arc<tui::KnoshCompleter>>,
+    completer: Option<Arc<tui::Completer>>,
     line: &str,
     error_prefix: &str,
     path: Option<String>,
@@ -331,7 +331,7 @@ pub fn print_execution_result(
     }
 }
 
-fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::KnoshCompleter>, input_value: Value) {
+fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Completer>, input_value: Value) {
     if let Value::List(list) = input_value {
         let mut iter = list.iter();
         let first_value = iter.next();

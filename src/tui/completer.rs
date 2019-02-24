@@ -5,17 +5,17 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ketos::{complete_name, Context};
-use linefeed::{Completer, Completion, Prompter, Suffix, Terminal};
+use linefeed::{Completer as LinefeedCompleter, Completion, Prompter, Suffix, Terminal};
 
 use super::context::thread_context;
 use crate::util;
 
 #[derive(Default)]
-pub struct KnoshCompleter {
+pub struct Completer {
     args: Mutex<HashMap<String, BTreeMap<String, usize>>>,
 }
 
-impl<Term: Terminal> Completer<Term> for KnoshCompleter {
+impl<Term: Terminal> LinefeedCompleter<Term> for Completer {
     fn complete(&self, word: &str, prompter: &Prompter<Term>, start: usize, end: usize) -> Option<Vec<Completion>> {
         let line_start = prompter.buffer()[..start].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
         let is_whitespace = prompter.buffer()[line_start..start]
@@ -45,7 +45,7 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
     }
 }
 
-impl KnoshCompleter {
+impl Completer {
     fn completions(&self, context: Context, word: &str, prior: &str) -> Vec<Completion> {
         // complete names
         let mut completions: Vec<Completion> = complete_name(word, context.scope())

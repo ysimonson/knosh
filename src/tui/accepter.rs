@@ -5,9 +5,9 @@ use linefeed::{Function, Prompter, Terminal};
 
 use super::context::thread_context;
 
-pub struct KnoshAccept;
+pub struct Accepter;
 
-impl<Term: Terminal> Function<Term> for KnoshAccept {
+impl<Term: Terminal> Function<Term> for Accepter {
     fn execute(&self, prompter: &mut Prompter<Term>, count: i32, _ch: char) -> io::Result<()> {
         if is_parseable(prompter.buffer()) {
             prompter.accept_input()

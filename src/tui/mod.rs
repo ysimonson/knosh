@@ -1,7 +1,7 @@
-mod accept;
-mod complete;
+mod accepter;
+mod completer;
 mod context;
 
-pub use self::accept::{is_parseable, KnoshAccept};
-pub use self::complete::KnoshCompleter;
+pub use self::accepter::{is_parseable, Accepter};
+pub use self::completer::Completer;
 pub use self::context::set_thread_context;
