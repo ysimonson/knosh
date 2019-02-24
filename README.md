@@ -40,7 +40,8 @@ Tab completions work on:
 * Functions
 * Variables
 * Paths
-* Proc args (e.g. `-l` on `ls`, if you've run `ls -l` before.)
+* Proc names
+* Proc args
 
 ## Builtins
 

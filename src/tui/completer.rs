@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
+use std::fs;
 use std::iter::repeat;
 use std::path::Path;
 use std::sync::Mutex;
@@ -10,9 +11,18 @@ use linefeed::{Completer as LinefeedCompleter, Completion, Prompter, Suffix, Ter
 use super::context::thread_context;
 use crate::util;
 
-#[derive(Default)]
 pub struct Completer {
+    procs: BTreeSet<String>,
     args: Mutex<HashMap<String, BTreeMap<String, usize>>>,
+}
+
+impl Default for Completer {
+    fn default() -> Self {
+        Completer {
+            procs: executables(),
+            args: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 impl<Term: Terminal> LinefeedCompleter<Term> for Completer {
@@ -73,7 +83,9 @@ impl Completer {
 
         // complete args
         if let Some(after_last_paren) = prior.rsplit('(').next() {
-            if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
+            if after_last_paren == "" {
+                completions.extend(self.proc_completions(word));
+            } else if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
                 completions.extend(self.arg_completions(fn_name, word));
             }
         }
@@ -124,6 +136,21 @@ impl Completer {
         words
     }
 
+    fn proc_completions(&self, word: &str) -> Vec<Completion> {
+        let mut procs = Vec::new();
+        let word_cloned = word.to_string();
+
+        for executable in self.procs.range(word_cloned..) {
+            if !executable.starts_with(&word) {
+                break;
+            }
+
+            procs.push(Completion::simple(executable.to_string()));
+        }
+
+        procs
+    }
+
     fn arg_completions(&self, cmd: &str, word: &str) -> Vec<Completion> {
         let args = self.args.lock().unwrap();
         let cmd_args = args.get(cmd);
@@ -157,4 +184,42 @@ impl Completer {
         let count = cmd_args.entry(arg.to_string()).or_insert(0);
         *count += 1;
     }
+}
+
+fn executables() -> BTreeSet<String> {
+    let mut executables = BTreeSet::new();
+
+    let path = match env::var("PATH") {
+        Ok(p) => p,
+        Err(_) => return executables
+    };
+
+    for dirpath in path.split(":") {
+        let entries = match fs::read_dir(dirpath) {
+            Ok(e) => e,
+            Err(_) => continue
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue
+            };
+
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue
+            };
+
+            if !metadata.is_file() {
+                continue;
+            }
+        
+            if let Ok(name) = entry.file_name().into_string() {
+                executables.insert(name);
+            }
+        }
+    }
+
+    executables
 }
