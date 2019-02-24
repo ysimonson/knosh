@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::process;
 use std::rc::Rc;
@@ -83,8 +83,26 @@ impl Interpreter {
             Ok(())
         });
 
-        ketos_closure!(scope, "env", |key: &str| -> OsString {
-            Ok(env::var_os(key).unwrap_or_else(OsString::default))
+        scope.add_value_with_name("env", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+
+                if let Some(value) = iter.next() {
+                    let key = <&OsStr>::from_value_ref(value)?;
+                    let value = env::var_os(key.to_os_string());
+                    Ok(value.into())
+                } else {
+                    let mut values = Vec::new();
+
+                    for (key, value) in env::vars_os() {
+                        values.push((key, value));
+                    }
+
+                    Ok(values.into())
+                }
+            })
         });
 
         ketos_closure!(scope, "del-env", |key: &str| -> () {
