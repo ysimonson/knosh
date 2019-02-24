@@ -66,10 +66,10 @@ impl Proc {
         }
     }
 
-    pub fn poll(&self) -> Result<ExitStatus, Error> {
+    pub fn poll(&self) -> Result<Option<ExitStatus>, Error> {
         match self.0.borrow_mut().try_wait() {
-            Ok(Some(status)) => Ok(ExitStatus::new(status)),
-            Ok(None) => Err(ketos_err("child not finished")),
+            Ok(Some(status)) => Ok(Some(ExitStatus::new(status))),
+            Ok(None) => Ok(None),
             Err(err) => Err(ketos_err(format!("could not wait for child: {}", err))),
         }
     }
@@ -125,13 +125,13 @@ impl ExitStatus {
         self.0.success()
     }
 
-    pub fn code(&self) -> Result<i32, Error> {
-        self.0.code().ok_or_else(|| ketos_err("no exit code"))
+    pub fn code(&self) -> Option<i32> {
+        self.0.code()
     }
 
     #[cfg(unix)]
-    pub fn signal(&self) -> Result<i32, Error> {
-        self.0.signal().ok_or_else(|| ketos_err("no exit signal"))
+    pub fn signal(&self) -> Option<i32> {
+        self.0.signal()
     }
 }
 

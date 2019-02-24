@@ -261,7 +261,9 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "poll", |child: &Proc| -> ExitStatus { child.poll() });
+        ketos_closure!(scope, "poll", |child: &Proc| -> Option<ExitStatus> {
+            child.poll()
+        });
 
         scope.add_value_with_name("pid", |name| {
             Value::new_foreign_fn(name, move |_, args| {
@@ -334,10 +336,14 @@ impl Interpreter {
             Ok(status.success())
         });
 
-        ketos_closure!(scope, "exit/code", |status: &ExitStatus| -> i32 { status.code() });
+        ketos_closure!(scope, "exit/code", |status: &ExitStatus| -> Option<i32> {
+            Ok(status.code())
+        });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> i32 { status.signal() });
+        ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> Option<i32> {
+            Ok(status.signal())
+        });
 
         scope.add_value_with_name("|", |name| {
             Value::new_foreign_fn(name, move |_, args| {

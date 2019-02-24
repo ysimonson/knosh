@@ -70,10 +70,10 @@ Functions:
   * If it's three arguments, it specifies the process' stdin, stdout, and stderr in that order.
 * `(exec p:ProcPromise)`: Execs a promise, replacing the shell's process with the specified one.
 * `(wait p:Proc) -> ExitStatus`: Waits for a proc to finish, returning its exit status.
-* `(poll p:Proc) -> ExitStatus`: Polls for the proc status. If the proc has finished, the exit status is returned. Otherwise this throws an error.
+* `(poll p:Proc) -> ExitStatus|()`: Polls for the proc status. If the proc has finished, the exit status is returned. Otherwise it returns the unit value.
 * `(exit/success? s:ExitStatus) -> bool`: Returns whether the proc exit status is considered successful.
-* `(exit/code s:ExitStatus) -> integer`: Gets the exit status code of the proc.
-* `(exit/signal s:ExitStatus) -> integer`: If the proc was terminated by a signal, this returns that signal. Otherwise it throws an error.
+* `(exit/code s:ExitStatus) -> integer|()`: If the proc had an exit code, this returns that code. Otherwise it returns the unit value.
+* `(exit/signal s:ExitStatus) -> integer|()`: If the proc was terminated by a signal, this returns that signal. Otherwise it returns the unit value.
 * `(pid p:Proc) -> integer`: Returns the proc's pid.
 * `(write p:Proc, bytes:bytestring)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
 * `(stdin/fd p:Proc) -> integer`: Returns the proc's stdin fd.
