@@ -1,0 +1,3 @@
+#!/usr/bin/env knosh
+set-env STRING "hello world"
+println "~s" (env STRING)
