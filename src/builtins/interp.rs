@@ -115,14 +115,7 @@ impl Interpreter {
             
             let callback = match iter.next() {
                 Some(Value::Lambda(lambda)) => lambda,
-                Some(value) => {
-                    let err = ExecError::TypeError {
-                        expected: "function",
-                        found: value.type_name(),
-                        value: None,
-                    };
-                    return Err(err.into());
-                },
+                Some(value) => return Err(type_error("function", value))?,
                 None => unreachable!()
             };
 
@@ -196,12 +189,7 @@ impl Interpreter {
                 _ => {
                     for value in &stdio {
                         if value.type_name() != "integer" {
-                            let err = ExecError::TypeError {
-                                expected: "integer",
-                                found: value.type_name(),
-                                value: None,
-                            };
-                            return Err(err.into())
+                            return Err(type_error("integer", &value));
                         }
                     }
 
@@ -238,12 +226,7 @@ impl Interpreter {
                 p.wait()?;
                 Ok(().into())
             } else {
-                let err = ExecError::TypeError {
-                    expected: "child or child interp process",
-                    found: value.type_name(),
-                    value: None,
-                };
-                Err(err.into())
+                return Err(type_error("waitable", value));
             }
         }));
 
@@ -385,4 +368,13 @@ fn to_stdio_u8(i: &Integer) -> Result<u8, Error> {
         Some(value) if value <= 2 => Ok(value),
         _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }
+}
+
+fn type_error(expected: &'static str, value: &Value) -> Error {
+    let err = ExecError::TypeError {
+        expected,
+        found: value.type_name(),
+        value: None,
+    };
+    err.into()
 }

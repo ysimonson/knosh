@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::collections::{HashMap, BTreeMap};
 
-use ketos::complete_name;
+use ketos::{Context, complete_name};
 use linefeed::{Completer, Completion, Prompter, Suffix, Terminal};
 
 use super::context::thread_context;
@@ -16,13 +16,7 @@ pub struct KnoshCompleter {
 }
 
 impl<Term: Terminal> Completer<Term> for KnoshCompleter {
-    fn complete(
-        &self,
-        word: &str,
-        prompter: &Prompter<Term>,
-        start: usize,
-        end: usize,
-    ) -> Option<Vec<Completion>> {
+    fn complete(&self, word: &str, prompter: &Prompter<Term>, start: usize, end: usize) -> Option<Vec<Completion>> {
         let line_start = prompter.buffer()[..start]
             .rfind('\n')
             .map(|pos| pos + 1)
@@ -41,85 +35,99 @@ impl<Term: Terminal> Completer<Term> for KnoshCompleter {
                 suffix: Suffix::None,
             }])
         } else {
-            let ctx = thread_context();
+            let context = thread_context();
+            let prior = &prompter.buffer()[0..start];
+            let completions = self.completions(context, word, prior);
 
-            // complete names
-            let mut completions: Vec<Completion> = complete_name(word, ctx.scope())
-                .unwrap_or_else(Vec::default)
-                .into_iter()
-                .map(Completion::simple)
-                .collect();
-
-            // complete paths
-            if let Ok(path) = util::expand_path(word) {
-                if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with('/') {
-                    if let Ok(current_dir) = env::current_dir() {
-                        if let Some(path) = path.to_str() {
-                            completions.extend(self.complete_paths(&current_dir, &path));
-                        }
-                    }
-                } else if word.ends_with('/') {
-                    completions.extend(self.complete_paths(&path, ""));
-                } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
-                    if let Some(parent_path) = path.parent() {
-                        completions.extend(self.complete_paths(parent_path, filename_prefix));
-                    }
-                }
-            }
-
-            // complete args
-            if let Some(after_last_paren) = prompter.buffer()[0..start].rsplit('(').next() {
-                if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
-                    completions.extend(self.complete_args(fn_name, word));
-                }
-            }
-
-            if !completions.is_empty() {
-                Some(completions)
-            } else {
+            if completions.is_empty() {
                 None
+            } else {
+                Some(completions)
             }
         }
     }
 }
 
 impl KnoshCompleter {
-    fn complete_paths(&self, parent_path: &Path, filename_prefix: &str) -> Vec<Completion> {
-        let mut words = Vec::new();
+    fn completions(&self, context: Context, word: &str, prior: &str) -> Vec<Completion> {
+        // complete names
+        let mut completions: Vec<Completion> = complete_name(word, context.scope())
+            .unwrap_or_else(Vec::default)
+            .into_iter()
+            .map(Completion::simple)
+            .collect();
 
-        if let Ok(siblings) = parent_path.read_dir() {
-            for sibling in siblings {
-                if let Ok(sibling) = sibling {
-                    if let Some(sibling_filename) = sibling.file_name().to_str() {
-                        if sibling_filename.starts_with(filename_prefix) {
-                            if let Some(sibling_path) = sibling.path().to_str() {
-                                let is_dir = match sibling.file_type() {
-                                    Ok(t) => t.is_dir(),
-                                    Err(_) => false
-                                };
-
-                                let completion = if is_dir {
-                                    format!("{}/", sibling_path)
-                                } else {
-                                    sibling_path.to_string()
-                                };
-
-                                words.push(Completion {
-                                    completion,
-                                    display: None,
-                                    suffix: Suffix::None,
-                                });
-                            }
-                        }
+        // complete paths
+        if let Ok(path) = util::expand_path(word) {
+            if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with('/') {
+                if let Some(path) = path.to_str() {
+                    if let Ok(current_dir) = env::current_dir() {
+                        completions.extend(self.path_completions(&current_dir, &path));
                     }
                 }
+            } else if word.ends_with('/') {
+                completions.extend(self.path_completions(&path, ""));
+            } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
+                if let Some(parent_path) = path.parent() {
+                    completions.extend(self.path_completions(parent_path, filename_prefix));
+                }
+            }
+        }
+
+        // complete args
+        if let Some(after_last_paren) = prior.rsplit('(').next() {
+            if let Some(fn_name) = after_last_paren.split(char::is_whitespace).next() {
+                completions.extend(self.arg_completions(fn_name, word));
+            }
+        }
+
+        completions
+    }
+
+    fn path_completions(&self, parent_path: &Path, filename_prefix: &str) -> Vec<Completion> {
+        let mut words = Vec::new();
+
+        let siblings = match parent_path.read_dir() {
+            Ok(s) => s,
+            Err(_) => return words
+        };
+
+        for sibling in siblings {
+            let sibling = match sibling {
+                Ok(s) => s,
+                Err(_) => continue
+            };
+
+            match sibling.file_name().to_str() {
+                Some(s) if !s.starts_with(filename_prefix) => continue,
+                Some(_) => {}
+                None => continue
+            };
+
+            if let Some(sibling_path) = sibling.path().to_str() {
+                let is_dir = match sibling.file_type() {
+                    Ok(t) => t.is_dir(),
+                    Err(_) => false
+                };
+
+                let completion = if is_dir {
+                    format!("{}/", sibling_path)
+                } else {
+                    sibling_path.to_string()
+                };
+
+                words.push(Completion {
+                    completion,
+                    display: None,
+                    suffix: Suffix::None,
+                });
             }
         }
 
         words
     }
 
-    fn complete_args(&self, cmd: &str, word: &str) -> Vec<Completion> {
+    fn arg_completions(&self, cmd: &str, word: &str) -> Vec<Completion> {
         let args = self.args.lock().unwrap();
         let cmd_args = args.get(cmd);
 

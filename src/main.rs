@@ -316,23 +316,7 @@ pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<
 
             // Update the args completer
             if let Some(completer) = completer {
-                if let Value::List(list) = input_value {
-                    let mut iter = list.iter();
-                    let first_value = iter.next();
-                    let second_value = iter.next();
-
-                    match (first_value, second_value) {
-                        (Some(Value::Name(first_name)), Some(Value::String(cmd))) if first_name == &interp.proc_name => {
-                            // This seems to be a proc call - process the arguments
-                            for value in iter {
-                                if let Value::String(arg) = value {
-                                    completer.add_arg(&cmd, &arg);
-                                }
-                            }
-                        },
-                        _ => {}
-                    }
-                }
+                update_arg_completions(interp, completer, input_value);
             }
 
             true
@@ -341,6 +325,25 @@ pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<
         Err(err) => {
             display_error(&interp, error_prefix, &err);
             false
+        }
+    }
+}
+
+fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::KnoshCompleter>, input_value: Value) {
+    if let Value::List(list) = input_value {
+        let mut iter = list.iter();
+        let first_value = iter.next();
+        let second_value = iter.next();
+
+        if let (Some(Value::Name(first_name)), Some(Value::String(cmd))) = (first_value, second_value) {
+            if first_name == &interp.proc_name {
+                // This is a proc call - process the arguments
+                for value in iter {
+                    if let Value::String(arg) = value {
+                        completer.add_arg(&cmd, &arg);
+                    }
+                }
+            }
         }
     }
 }
