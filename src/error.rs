@@ -1,6 +1,6 @@
-use std::fmt;
 use ketos::Error;
 use std::error::Error as StdError;
+use std::fmt;
 
 /// `SimpleError`s are just errors with string contents.
 #[derive(Debug)]
@@ -10,9 +10,7 @@ pub struct SimpleError {
 
 impl SimpleError {
     pub fn new(description: String) -> SimpleError {
-        SimpleError {
-            description,
-        }
+        SimpleError { description }
     }
 }
 

@@ -1,8 +1,8 @@
 use ketos::Error;
 #[cfg(unix)]
-use nix::unistd::Pid;
-#[cfg(unix)]
 use nix::sys::wait::{waitpid, WaitStatus};
+#[cfg(unix)]
+use nix::unistd::Pid;
 
 use crate::error::ketos_err;
 
@@ -21,11 +21,13 @@ impl SubInterp {
         // signals
         loop {
             match waitpid(Some(self.0), None) {
-                Ok(WaitStatus::Exited(_, code)) => if code == 0 {
-                    return Ok(());
-                } else {
-                    return Err(ketos_err(format!("child interp return non-zero code: {}", code)));
-                },
+                Ok(WaitStatus::Exited(_, code)) => {
+                    if code == 0 {
+                        return Ok(());
+                    } else {
+                        return Err(ketos_err(format!("child interp return non-zero code: {}", code)));
+                    }
+                }
                 Ok(WaitStatus::Signaled(_, _, _)) => return Ok(()),
                 Ok(_) => (),
                 Err(err) => return Err(ketos_err(format!("could not wait for child interp: {}", err))),

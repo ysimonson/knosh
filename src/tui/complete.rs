@@ -1,10 +1,10 @@
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::iter::repeat;
 use std::path::Path;
 use std::sync::Mutex;
-use std::collections::{HashMap, BTreeMap};
 
-use ketos::{Context, complete_name};
+use ketos::{complete_name, Context};
 use linefeed::{Completer, Completion, Prompter, Suffix, Terminal};
 
 use super::context::thread_context;
@@ -12,15 +12,12 @@ use crate::util;
 
 #[derive(Default)]
 pub struct KnoshCompleter {
-    args: Mutex<HashMap<String, BTreeMap<String, usize>>>
+    args: Mutex<HashMap<String, BTreeMap<String, usize>>>,
 }
 
 impl<Term: Terminal> Completer<Term> for KnoshCompleter {
     fn complete(&self, word: &str, prompter: &Prompter<Term>, start: usize, end: usize) -> Option<Vec<Completion>> {
-        let line_start = prompter.buffer()[..start]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
+        let line_start = prompter.buffer()[..start].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
         let is_whitespace = prompter.buffer()[line_start..start]
             .chars()
             .all(|ch| ch.is_whitespace());
@@ -89,25 +86,25 @@ impl KnoshCompleter {
 
         let siblings = match parent_path.read_dir() {
             Ok(s) => s,
-            Err(_) => return words
+            Err(_) => return words,
         };
 
         for sibling in siblings {
             let sibling = match sibling {
                 Ok(s) => s,
-                Err(_) => continue
+                Err(_) => continue,
             };
 
             match sibling.file_name().to_str() {
                 Some(s) if !s.starts_with(filename_prefix) => continue,
                 Some(_) => {}
-                None => continue
+                None => continue,
             };
 
             if let Some(sibling_path) = sibling.path().to_str() {
                 let is_dir = match sibling.file_type() {
                     Ok(t) => t.is_dir(),
-                    Err(_) => false
+                    Err(_) => false,
                 };
 
                 let completion = if is_dir {
@@ -139,12 +136,11 @@ impl KnoshCompleter {
                     break;
                 }
 
-                candidate_args.entry(count)
-                    .or_insert_with(Vec::default)
-                    .push(arg);
+                candidate_args.entry(count).or_insert_with(Vec::default).push(arg);
             }
 
-            let mut completions: Vec<Completion> = candidate_args.values()
+            let mut completions: Vec<Completion> = candidate_args
+                .values()
                 .flatten()
                 .map(|s| Completion::simple(s.to_string()))
                 .collect();

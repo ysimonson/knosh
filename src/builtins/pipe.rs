@@ -4,20 +4,22 @@ use std::thread;
 
 use ketos::Error;
 
-use crate::error::ketos_err;
 use super::{Proc, ProcPromise};
+use crate::error::ketos_err;
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct PipePromise(RefCell<Vec<ProcPromise>>);
 
 impl PipePromise {
     pub fn new(children: Vec<&ProcPromise>) -> Self {
-        Self { 0: RefCell::new(children.into_iter().cloned().collect()) }
+        Self {
+            0: RefCell::new(children.into_iter().cloned().collect()),
+        }
     }
 
     pub fn run(&self) -> Result<(), Error> {
         let pipe = self.spawn(0, 0, 0)?;
-        
+
         if let Some(err) = pipe.wait().pop() {
             Err(err)
         } else {
@@ -30,11 +32,11 @@ impl PipePromise {
         debug_assert!(children.len() >= 2);
         let mut spawned_children = vec![children[0].spawn(stdin, 1, stderr)?];
 
-        for child in children.iter().take(children.len()-2).skip(1) {
+        for child in children.iter().take(children.len() - 2).skip(1) {
             spawned_children.push(child.spawn(1, 1, stderr)?)
         }
 
-        spawned_children.push(children[children.len()-1].spawn(1, stdout, stderr)?);
+        spawned_children.push(children[children.len() - 1].spawn(1, stdout, stderr)?);
         Ok(Pipe::new(spawned_children))
     }
 }
@@ -42,7 +44,7 @@ impl PipePromise {
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct Pipe {
     children: RefCell<Vec<Proc>>,
-    threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>
+    threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>,
 }
 
 impl Pipe {
@@ -55,18 +57,16 @@ impl Pipe {
             let mut stdout = src.take_stdout().expect("expected stdout");
             let mut stdin = dest.take_stdin().expect("expected stdin");
 
-            threads.push(thread::spawn(move || {
-                match io::copy(&mut stdout, &mut stdin) {
-                    Ok(_) => Ok(()),
-                    Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-                    Err(err) => Err(err)
-                }
+            threads.push(thread::spawn(move || match io::copy(&mut stdout, &mut stdin) {
+                Ok(_) => Ok(()),
+                Err(ref err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+                Err(err) => Err(err),
             }));
         }
 
         Self {
             children: RefCell::new(children),
-            threads: RefCell::new(threads)
+            threads: RefCell::new(threads),
         }
     }
 
@@ -84,12 +84,12 @@ impl Pipe {
                 Ok(Err(err)) => {
                     let err = ketos_err(format!("pipe failed: {}", err));
                     errors.push(err);
-                },
+                }
                 Err(err) => {
                     let err = ketos_err(format!("pipe thread panic: {:?}", err));
                     errors.push(err);
-                },
-                Ok(_) => ()
+                }
+                Ok(_) => (),
             }
         }
 

@@ -1,13 +1,17 @@
 use std::rc::Rc;
 
-use ketos::{Error, Value};
-use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::compile::compile;
+use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::rc_vec::{RcString, RcVec};
+use ketos::{Error, Value};
 
 use crate::builtins;
 
-pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) -> Result<Option<(Value, Value)>, Error> {
+pub fn exprs(
+    interp: &builtins::Interpreter,
+    exprs: &str,
+    path: Option<String>,
+) -> Result<Option<(Value, Value)>, Error> {
     let ketos_interp = interp.inner();
     let mut values = ketos_interp.parse_exprs(exprs, path)?;
 
@@ -18,7 +22,7 @@ pub fn exprs(interp: &builtins::Interpreter, exprs: &str, path: Option<String>) 
     // Automatically insert parens if they're not explicitly put
     let input_value = match values.as_slice() {
         [Value::List(_)] => values.pop().unwrap(),
-        _ => Value::List(RcVec::new(values))
+        _ => Value::List(RcVec::new(values)),
     };
 
     let input_value = rewrite_exprs(interp, input_value);
@@ -47,7 +51,10 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
                     new_list.push(Value::Name(first_name));
 
                     match first_name {
-                        standard_names::LET | standard_names::DEFINE | standard_names::MACRO | standard_names::LAMBDA => {
+                        standard_names::LET
+                        | standard_names::DEFINE
+                        | standard_names::MACRO
+                        | standard_names::LAMBDA => {
                             if let Some(first_arg) = iter.next() {
                                 new_list.push(first_arg);
                             }
@@ -57,7 +64,7 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
                                 new_list.push(arg);
                             }
                         }
-                        _ => ()
+                        _ => (),
                     }
                 } else if !is_system_fn(first_name) && !scope.contains_name(first_name) {
                     // Looks like this expr is shaped like a function call, to a
@@ -85,6 +92,6 @@ fn rewrite_exprs(interp: &builtins::Interpreter, value: Value) -> Value {
             let arg_str = name_store.get(name).to_string();
             Value::String(RcString::new(arg_str))
         }
-        _ => value
+        _ => value,
     }
 }

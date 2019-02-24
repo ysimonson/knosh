@@ -1,11 +1,11 @@
-use std::fmt;
-use std::usize;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::usize;
 
-use ketos::Error;
 use ketos::function::Lambda;
+use ketos::Error;
 
 use crate::error::ketos_err;
 
@@ -14,7 +14,7 @@ pub struct TrapMap {
     pub name: String,
     pub index: u8,
     next_key: AtomicUsize,
-    traps: RefCell<HashMap<usize, Lambda>>
+    traps: RefCell<HashMap<usize, Lambda>>,
 }
 
 impl TrapMap {

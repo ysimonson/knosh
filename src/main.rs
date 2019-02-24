@@ -11,23 +11,23 @@ extern crate nix;
 mod builtins;
 mod error;
 mod executor;
-mod util;
 mod tui;
+mod util;
 
 use std::env;
-use std::io::{self, stderr, Write, BufRead, BufReader};
+use std::fs::File;
+use std::io::{self, stderr, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::fs::File;
 
 use gumdrop::{Options, ParsingStyle};
-use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use ketos::io::{IoError, IoMode};
+use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use linefeed::{Command, Interface, ReadResult, Signal};
 
-use crate::tui::{KnoshAccept, is_parseable, KnoshCompleter};
+use crate::tui::{is_parseable, KnoshAccept, KnoshCompleter};
 
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 
@@ -160,9 +160,7 @@ fn parse_restrict(params: &str) -> Result<RestrictConfig, String> {
                 };
 
                 match name {
-                    "execution_time" => {
-                        res.execution_time = Some(Duration::from_millis(parse_param(name, value)?))
-                    }
+                    "execution_time" => res.execution_time = Some(Duration::from_millis(parse_param(name, value)?)),
                     "call_stack_size" => res.call_stack_size = parse_param(name, value)?,
                     "value_stack_size" => res.value_stack_size = parse_param(name, value)?,
                     "namespace_size" => res.namespace_size = parse_param(name, value)?,
@@ -263,11 +261,9 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
         let cur_dir = util::shrink_path(cur_dir, SOFT_MAX_PROMPT_LENGTH - 2);
         let prompt = cur_dir.to_str().unwrap_or("λ");
         interface.set_prompt(&format!("{}> ", prompt))?;
-        
+
         match interface.read_line()? {
-            ReadResult::Eof => {
-                break
-            },
+            ReadResult::Eof => break,
             ReadResult::Input(mut line) => {
                 interface.add_history(line.clone());
                 line.push('\n');
@@ -295,7 +291,13 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
     Ok(())
 }
 
-pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<Arc<tui::KnoshCompleter>>, line: &str, error_prefix: &str, path: Option<String>) -> bool {
+pub fn print_execution_result(
+    interp: &builtins::Interpreter,
+    completer: Option<Arc<tui::KnoshCompleter>>,
+    line: &str,
+    error_prefix: &str,
+    path: Option<String>,
+) -> bool {
     match executor::exprs(interp, line, path) {
         Ok(Some((input_value, output_value))) => {
             if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&output_value) {
@@ -320,7 +322,7 @@ pub fn print_execution_result(interp: &builtins::Interpreter, completer: Option<
             }
 
             true
-        },
+        }
         Ok(None) => true,
         Err(err) => {
             display_error(&interp, error_prefix, &err);
@@ -350,7 +352,7 @@ fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Kn
 
 fn print_restrict_usage() {
     print!(
-r#"The `-R` / `--restrict` option accepts a comma-separated list of parameters:
+        r#"The `-R` / `--restrict` option accepts a comma-separated list of parameters:
   permissive
     Applies "permissive" restrictions (default)
   strict

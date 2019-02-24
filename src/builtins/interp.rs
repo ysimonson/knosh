@@ -1,26 +1,26 @@
 use std::borrow::Borrow;
-use std::rc::Rc;
 use std::env;
-use std::usize;
-use std::process;
 use std::ffi::OsString;
 use std::io;
+use std::process;
+use std::rc::Rc;
+use std::usize;
 
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
-use ketos::{Error, Integer, Name, Value, Interpreter as KetosInterpreter};
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
+use ketos::{Error, Integer, Interpreter as KetosInterpreter, Name, Value};
 use linefeed::Signal;
 
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult};
 
+use super::{ExitStatus, Pipe, PipePromise, Proc, ProcPromise, SubInterp, TrapMap};
 use crate::error::ketos_err;
 use crate::util;
-use super::{TrapMap, Proc, SubInterp, ProcPromise, Pipe, PipePromise, ExitStatus};
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
@@ -77,7 +77,7 @@ impl Interpreter {
         ketos_closure!(scope, "untrap", |traps: &TrapMap, key: usize| -> bool {
             traps.remove(key)
         });
-        
+
         ketos_closure!(scope, "set-env", |key: &str, value: &str| -> () {
             env::set_var(key, value);
             Ok(())
@@ -108,215 +108,229 @@ impl Interpreter {
         });
 
         #[cfg(unix)]
-        scope.add_value_with_name("fork", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Exact(1), args.len(), name)?;
+        scope.add_value_with_name("fork", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(1), args.len(), name)?;
 
-            let mut iter = (&*args).iter();
-            
-            let callback = match iter.next() {
-                Some(Value::Lambda(lambda)) => lambda,
-                Some(value) => return Err(type_error("function", value))?,
-                None => unreachable!()
-            };
+                let mut iter = (&*args).iter();
 
-            match fork() {
-                Ok(ForkResult::Parent { child, .. }) => {
-                    Ok(SubInterp::new(child).into())
-                },
-                Ok(ForkResult::Child) => {
-                    let lambda = Value::Lambda(callback.clone());
-                    match interp_fork.call_value(lambda, vec![]) {
-                        Ok(_) => process::exit(0),
-                        Err(_) => process::exit(1),
+                let callback = match iter.next() {
+                    Some(Value::Lambda(lambda)) => lambda,
+                    Some(value) => return Err(type_error("function", value))?,
+                    None => unreachable!(),
+                };
+
+                match fork() {
+                    Ok(ForkResult::Parent { child, .. }) => Ok(SubInterp::new(child).into()),
+                    Ok(ForkResult::Child) => {
+                        let lambda = Value::Lambda(callback.clone());
+                        match interp_fork.call_value(lambda, vec![]) {
+                            Ok(_) => process::exit(0),
+                            Err(_) => process::exit(1),
+                        }
                     }
-                },
-                Err(err) => {
-                    Err(ketos_err(format!("could not fork: {}", err)))
+                    Err(err) => Err(ketos_err(format!("could not fork: {}", err))),
                 }
-            }
-        }));
+            })
+        });
 
-        scope.add_value(proc_name, Value::new_foreign_fn(proc_name, move |_, args| {
-            check_arity(Arity::Min(1), args.len(), proc_name)?;
+        scope.add_value(
+            proc_name,
+            Value::new_foreign_fn(proc_name, move |_, args| {
+                check_arity(Arity::Min(1), args.len(), proc_name)?;
 
-            let mut iter = (&*args).iter();
-            let value = iter.next().unwrap();
+                let mut iter = (&*args).iter();
+                let value = iter.next().unwrap();
 
-            let name = match value {
-                Value::String(v) => format!("{}", v).into(),
-                Value::Bytes(v) if cfg!(unix) => {
-                    use std::os::unix::ffi::OsStringExt;
-                    let bytes = v.clone().into_bytes();
-                    OsString::from_vec(bytes)
-                },
-                Value::Path(v) => v.clone().into_os_string(),
-                _ => return Err(ketos_err(format!("cannot use non-stringifiable value as a proc name: `{:?}`", value)))
-            };
-
-            let args_str: Result<Vec<OsString>, Error> = iter
-                .map(|value| match value {
-                    Value::Bool(v) => Ok(format!("{}", v).into()),
-                    Value::Float(v) => Ok(format!("{}", v).into()),
-                    Value::Integer(v) => Ok(format!("{}", v).into()),
-                    Value::Ratio(v) => Ok(format!("{}", v).into()),
-                    Value::Char(v) => Ok(format!("{}", v).into()),
-                    Value::String(v) => Ok(format!("{}", v).into()),
+                let name = match value {
+                    Value::String(v) => format!("{}", v).into(),
                     Value::Bytes(v) if cfg!(unix) => {
                         use std::os::unix::ffi::OsStringExt;
                         let bytes = v.clone().into_bytes();
-                        Ok(OsString::from_vec(bytes))
-                    },
-                    Value::Path(v) => Ok(v.clone().into_os_string()),
-                    _ => Err(ketos_err(format!("cannot use non-stringifiable value as an argument: `{:?}`", value)))
-                })
-                .collect();
-
-            Ok(ProcPromise::new(name, args_str?).into())
-        }));
-
-        scope.add_value_with_name("spawn", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Range(1, 4), args.len(), name)?;
-
-            let mut iter = (&*args).iter();
-            let p = <&ProcPromise>::from_value_ref(iter.next().unwrap())?;
-            let stdio = iter.collect::<Vec<&Value>>();
-
-            let (stdin, stdout, stderr) = match stdio.as_slice() {
-                [] => (0, 0, 0),
-                [Value::Integer(stdout)] => (0, to_stdio_u8(stdout)?, 0),
-                [Value::Integer(stdout), Value::Integer(stderr)] => (0, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
-                [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => (to_stdio_u8(stdin)?, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
-                _ => {
-                    for value in &stdio {
-                        if value.type_name() != "integer" {
-                            return Err(type_error("integer", &value));
-                        }
+                        OsString::from_vec(bytes)
                     }
+                    Value::Path(v) => v.clone().into_os_string(),
+                    _ => {
+                        return Err(ketos_err(format!(
+                            "cannot use non-stringifiable value as a proc name: `{:?}`",
+                            value
+                        )));
+                    }
+                };
 
-                    unreachable!();
-                }
-            };
+                let args_str: Result<Vec<OsString>, Error> = iter
+                    .map(|value| match value {
+                        Value::Bool(v) => Ok(format!("{}", v).into()),
+                        Value::Float(v) => Ok(format!("{}", v).into()),
+                        Value::Integer(v) => Ok(format!("{}", v).into()),
+                        Value::Ratio(v) => Ok(format!("{}", v).into()),
+                        Value::Char(v) => Ok(format!("{}", v).into()),
+                        Value::String(v) => Ok(format!("{}", v).into()),
+                        Value::Bytes(v) if cfg!(unix) => {
+                            use std::os::unix::ffi::OsStringExt;
+                            let bytes = v.clone().into_bytes();
+                            Ok(OsString::from_vec(bytes))
+                        }
+                        Value::Path(v) => Ok(v.clone().into_os_string()),
+                        _ => Err(ketos_err(format!(
+                            "cannot use non-stringifiable value as an argument: `{:?}`",
+                            value
+                        ))),
+                    })
+                    .collect();
 
-            Ok(p.spawn(stdin, stdout, stderr)?.into())
-        }));
+                Ok(ProcPromise::new(name, args_str?).into())
+            }),
+        );
+
+        scope.add_value_with_name("spawn", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(1, 4), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = <&ProcPromise>::from_value_ref(iter.next().unwrap())?;
+                let stdio = iter.collect::<Vec<&Value>>();
+
+                let (stdin, stdout, stderr) = match stdio.as_slice() {
+                    [] => (0, 0, 0),
+                    [Value::Integer(stdout)] => (0, to_stdio_u8(stdout)?, 0),
+                    [Value::Integer(stdout), Value::Integer(stderr)] => (0, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
+                    [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => {
+                        (to_stdio_u8(stdin)?, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?)
+                    }
+                    _ => {
+                        for value in &stdio {
+                            if value.type_name() != "integer" {
+                                return Err(type_error("integer", &value));
+                            }
+                        }
+
+                        unreachable!();
+                    }
+                };
+
+                Ok(p.spawn(stdin, stdout, stderr)?.into())
+            })
+        });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exec", |cmd: &ProcPromise| -> () {
-            cmd.exec()
-        });
+        ketos_closure!(scope, "exec", |cmd: &ProcPromise| -> () { cmd.exec() });
 
-        scope.add_value_with_name("wait", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Exact(1), args.len(), name)?;
+        scope.add_value_with_name("wait", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(1), args.len(), name)?;
 
-            let mut iter = (&*args).iter();
-            let value = iter.next().unwrap();
+                let mut iter = (&*args).iter();
+                let value = iter.next().unwrap();
 
-            if let Ok(p) = <&Proc>::from_value_ref(value) {
-                p.wait()?;
-                Ok(().into())
-            } else if let Ok(p) = <&Pipe>::from_value_ref(value) {
-                let mut errors = p.wait();
-
-                if let Some(err) = errors.pop() {
-                    Err(err)
-                } else {
+                if let Ok(p) = <&Proc>::from_value_ref(value) {
+                    p.wait()?;
                     Ok(().into())
-                }
-            } else if let Ok(p) = <&SubInterp>::from_value_ref(value) {
-                p.wait()?;
-                Ok(().into())
-            } else {
-                return Err(type_error("waitable", value));
-            }
-        }));
+                } else if let Ok(p) = <&Pipe>::from_value_ref(value) {
+                    let mut errors = p.wait();
 
-        ketos_closure!(scope, "poll", |child: &Proc| -> ExitStatus {
-            child.poll()
+                    if let Some(err) = errors.pop() {
+                        Err(err)
+                    } else {
+                        Ok(().into())
+                    }
+                } else if let Ok(p) = <&SubInterp>::from_value_ref(value) {
+                    p.wait()?;
+                    Ok(().into())
+                } else {
+                    return Err(type_error("waitable", value));
+                }
+            })
         });
 
-        scope.add_value_with_name("pid", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Range(0, 1), args.len(), name)?;
+        ketos_closure!(scope, "poll", |child: &Proc| -> ExitStatus { child.poll() });
 
-            let mut iter = (&*args).iter();
+        scope.add_value_with_name("pid", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
 
-            if let Some(value) = iter.next() {
-                let child = <&Proc>::from_value_ref(value)?;
-                Ok(child.pid().into())
-            } else {
-                Ok(process::id().into())
-            }
-        }));
+                let mut iter = (&*args).iter();
+
+                if let Some(value) = iter.next() {
+                    let child = <&Proc>::from_value_ref(value)?;
+                    Ok(child.pid().into())
+                } else {
+                    Ok(process::id().into())
+                }
+            })
+        });
 
         ketos_closure!(scope, "write", |child: &Proc, bytes: &[u8]| -> () {
             child.write(bytes)
         });
 
         #[cfg(unix)]
-        scope.add_value_with_name("stdin/fd", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Range(0, 1), args.len(), name)?;
+        scope.add_value_with_name("stdin/fd", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
 
-            let mut iter = (&*args).iter();
+                let mut iter = (&*args).iter();
 
-            if let Some(value) = iter.next() {
-                let child = <&Proc>::from_value_ref(value)?;
-                Ok(child.stdin_fd().into())
-            } else {
-                Ok(io::stdin().as_raw_fd().into())
-            }
-        }));
-
-        #[cfg(unix)]
-        scope.add_value_with_name("stdout/fd", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Range(0, 1), args.len(), name)?;
-
-            let mut iter = (&*args).iter();
-
-            if let Some(value) = iter.next() {
-                let child = <&Proc>::from_value_ref(value)?;
-                Ok(child.stdout_fd().into())
-            } else {
-                Ok(io::stdout().as_raw_fd().into())
-            }
-        }));
+                if let Some(value) = iter.next() {
+                    let child = <&Proc>::from_value_ref(value)?;
+                    Ok(child.stdin_fd().into())
+                } else {
+                    Ok(io::stdin().as_raw_fd().into())
+                }
+            })
+        });
 
         #[cfg(unix)]
-        scope.add_value_with_name("stderr/fd", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Range(0, 1), args.len(), name)?;
+        scope.add_value_with_name("stdout/fd", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
 
-            let mut iter = (&*args).iter();
+                let mut iter = (&*args).iter();
 
-            if let Some(value) = iter.next() {
-                let child = <&Proc>::from_value_ref(value)?;
-                Ok(child.stderr_fd().into())
-            } else {
-                Ok(io::stderr().as_raw_fd().into())
-            }
-        }));
+                if let Some(value) = iter.next() {
+                    let child = <&Proc>::from_value_ref(value)?;
+                    Ok(child.stdout_fd().into())
+                } else {
+                    Ok(io::stdout().as_raw_fd().into())
+                }
+            })
+        });
+
+        #[cfg(unix)]
+        scope.add_value_with_name("stderr/fd", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+
+                if let Some(value) = iter.next() {
+                    let child = <&Proc>::from_value_ref(value)?;
+                    Ok(child.stderr_fd().into())
+                } else {
+                    Ok(io::stderr().as_raw_fd().into())
+                }
+            })
+        });
 
         ketos_closure!(scope, "exit/success?", |status: &ExitStatus| -> bool {
             Ok(status.success())
         });
 
-        ketos_closure!(scope, "exit/code", |status: &ExitStatus| -> i32 {
-            status.code()
-        });
+        ketos_closure!(scope, "exit/code", |status: &ExitStatus| -> i32 { status.code() });
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> i32 {
-            status.signal()
+        ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> i32 { status.signal() });
+
+        scope.add_value_with_name("|", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Min(2), args.len(), name)?;
+
+                let ps: Result<Vec<&ProcPromise>, ExecError> =
+                    args.iter_mut().map(|arg| <&ProcPromise>::from_value_ref(arg)).collect();
+
+                Ok(PipePromise::new(ps?).into())
+            })
         });
-
-        scope.add_value_with_name("|", |name| Value::new_foreign_fn(name, move |_, args| {
-            check_arity(Arity::Min(2), args.len(), name)?;
-
-            let ps: Result<Vec<&ProcPromise>, ExecError> = args.iter_mut()
-                .map(|arg| {
-                    <&ProcPromise>::from_value_ref(arg)
-                })
-                .collect();
-
-            Ok(PipePromise::new(ps?).into())
-        }));
 
         ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<Proc> {
             Ok(pipe.children())
@@ -334,14 +348,15 @@ impl Interpreter {
             Signal::Quit => 2,
             Signal::Resize => 3,
             Signal::Suspend => 4,
-            _ => unimplemented!()
+            _ => unimplemented!(),
         };
 
         let args = vec![Value::Integer(Integer::from_u8(sig_int))];
         let interp = self.interp.clone();
         let interp = (*interp).borrow();
 
-        self.traps.iter()
+        self.traps
+            .iter()
             .filter(|t| t.index == sig_int)
             .take(1)
             .flat_map(|t| t.get())

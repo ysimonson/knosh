@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 use dirs;
 use ketos::Error;
@@ -17,7 +17,8 @@ pub fn shrink_path(mut path: PathBuf, max_len: u8) -> OsString {
         // If the path is too long, try to shorten parent directories
         let parts: Vec<&OsStr> = path.iter().collect();
         let len = parts.len();
-        path = parts.into_iter()
+        path = parts
+            .into_iter()
             .enumerate()
             .map(|(i, d)| {
                 if i == len - 1 {
@@ -25,7 +26,7 @@ pub fn shrink_path(mut path: PathBuf, max_len: u8) -> OsString {
                 } else {
                     match d.to_str() {
                         Some(s) if !s.is_empty() => s.chars().next().unwrap().to_string().into(),
-                        _ => d.to_os_string()
+                        _ => d.to_os_string(),
                     }
                 }
             })
