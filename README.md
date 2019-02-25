@@ -1,5 +1,7 @@
 # knosh
 
+⚠️ under heavy development ⚠️
+
 Keeping the spirit of the lisp machine alive in a frankensteinian combination sh and lisp.
 
 This is lisp-ey shell replacement, with a few ~~hacks~~features bolted on to make it more usable as a daily driver. The goal is to have about the same level of productivity as bash, but at the same time allow you to scale up the lines of code without your script turning into a giant bag of string-escaping mush.
