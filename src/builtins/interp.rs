@@ -22,6 +22,46 @@ use super::{ExitStatus, Pipe, PipePromise, Proc, ProcPromise, SubInterp, TrapMap
 use crate::error::ketos_err;
 use crate::util;
 
+macro_rules! ketos_stdio_reader {
+    ($scope:expr, $name:expr, $f:ident ( limit ) ) => (
+        $scope.add_value_with_name($name, |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(2), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = iter.next().unwrap();
+                let limit = usize::from_value_ref(iter.next().unwrap())?;
+
+                if let Ok(p) = <&Proc>::from_value_ref(p) {
+                    Ok(p.$f(limit)?.into())
+                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
+                    Ok(p.$f(limit)?.into())
+                } else {
+                    Err(type_error("readable", p))
+                }
+            })
+        });
+    );
+    ($scope:expr, $name:expr, $f:ident ( ) ) => (
+        $scope.add_value_with_name($name, |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(1), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = iter.next().unwrap();
+
+                if let Ok(p) = <&Proc>::from_value_ref(p) {
+                    Ok(p.$f()?.into())
+                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
+                    Ok(p.$f()?.into())
+                } else {
+                    Err(type_error("readable", p))
+                }
+            })
+        });
+    )
+}
+
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
     pub proc_name: Name,
@@ -287,40 +327,14 @@ impl Interpreter {
             })
         });
 
-        scope.add_value_with_name("read", |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Exact(2), args.len(), name)?;
-
-                let mut iter = (&*args).iter();
-                let p = iter.next().unwrap();
-                let limit = usize::from_value_ref(iter.next().unwrap())?;
-
-                if let Ok(p) = <&Proc>::from_value_ref(p) {
-                    Ok(p.read(limit)?.into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
-                    Ok(p.read(limit)?.into())
-                } else {
-                    Err(type_error("readable", p))
-                }
-            })
-        });
-
-        scope.add_value_with_name("read-to-end", |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Exact(1), args.len(), name)?;
-
-                let mut iter = (&*args).iter();
-                let p = iter.next().unwrap();
-
-                if let Ok(p) = <&Proc>::from_value_ref(p) {
-                    Ok(p.read_to_end()?.into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
-                    Ok(p.read_to_end()?.into())
-                } else {
-                    Err(type_error("readable", p))
-                }
-            })
-        });
+        ketos_stdio_reader!(scope, "stdout/read", read_stdout(limit));
+        ketos_stdio_reader!(scope, "stdout/read-string-to-end", read_stdout_string_to_end());
+        ketos_stdio_reader!(scope, "stdout/read-string-to-newline", read_stdout_string_to_newline());
+        ketos_stdio_reader!(scope, "stdout/read-to-end", read_stdout_to_end());
+        ketos_stdio_reader!(scope, "stderr/read", read_stderr(limit));
+        ketos_stdio_reader!(scope, "stderr/read-string-to-end", read_stderr_string_to_end());
+        ketos_stdio_reader!(scope, "stderr/read-string-to-newline", read_stderr_string_to_newline());
+        ketos_stdio_reader!(scope, "stderr/read-to-end", read_stderr_to_end());
 
         scope.add_value_with_name("write", |name| {
             Value::new_foreign_fn(name, move |_, args| {

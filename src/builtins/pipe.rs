@@ -58,8 +58,8 @@ impl Pipe {
         for i in 1..children.len() {
             let src = &children[i - 1];
             let dest = &children[i];
-            let mut stdout = src.take_stdout().expect("expected stdout");
-            let mut stdin = dest.take_stdin().expect("expected stdin");
+            let mut stdout = src.take_stdout()?;
+            let mut stdin = dest.take_stdin()?;
 
             threads.push(thread::spawn(move || match io::copy(&mut stdout, &mut stdin) {
                 Ok(_) => Ok(()),
@@ -97,14 +97,44 @@ impl Pipe {
         errors
     }
 
-    pub fn read(&self, limit: usize) -> Result<Bytes, Error> {
+    pub fn read_stdout(&self, limit: usize) -> Result<Bytes, Error> {
         let children = self.children.borrow_mut();
-        children.last().unwrap().read(limit)
+        children.last().unwrap().read_stdout(limit)
     }
 
-    pub fn read_to_end(&self) -> Result<Bytes, Error> {
+    pub fn read_stdout_string_to_end(&self) -> Result<String, Error> {
         let children = self.children.borrow_mut();
-        children.last().unwrap().read_to_end()
+        children.last().unwrap().read_stdout_string_to_end()
+    }
+
+    pub fn read_stdout_string_to_newline(&self) -> Result<String, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stdout_string_to_newline()
+    }
+
+    pub fn read_stdout_to_end(&self) -> Result<Bytes, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stdout_to_end()
+    }
+
+     pub fn read_stderr(&self, limit: usize) -> Result<Bytes, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stderr(limit)
+    }
+
+    pub fn read_stderr_string_to_end(&self) -> Result<String, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stderr_string_to_end()
+    }
+
+    pub fn read_stderr_string_to_newline(&self) -> Result<String, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stderr_string_to_newline()
+    }
+
+    pub fn read_stderr_to_end(&self) -> Result<Bytes, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_stderr_to_end()
     }
 
     pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
