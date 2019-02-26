@@ -7,7 +7,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process;
 
-use ketos::Error;
+use ketos::{Bytes, Error};
 
 use crate::error::ketos_err;
 
@@ -78,20 +78,20 @@ impl Proc {
         self.0.borrow().id()
     }
 
-    pub fn read(&self, limit: usize) -> Result<Vec<u8>, Error> {
+    pub fn read(&self, limit: usize) -> Result<Bytes, Error> {
         let mut buf = Vec::with_capacity(limit);
         let mut child = self.0.borrow_mut();
         let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
         let read = stdout.read(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
-        Ok(buf[..read].to_vec())
+        Ok(Bytes::new(buf[..read].to_vec()))
     }
 
-    pub fn read_to_end(&self) -> Result<Vec<u8>, Error> {
+    pub fn read_to_end(&self) -> Result<Bytes, Error> {
         let mut buf = Vec::new();
         let mut child = self.0.borrow_mut();
         let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
         let read = stdout.read_to_end(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
-        Ok(buf[..read].to_vec())
+        Ok(Bytes::new(buf[..read].to_vec()))
     }
 
     pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {

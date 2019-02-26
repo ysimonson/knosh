@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::io;
 use std::thread;
 
-use ketos::Error;
+use ketos::{Bytes, Error};
 
 use super::{Proc, ProcPromise};
 use crate::error::ketos_err;
@@ -97,12 +97,12 @@ impl Pipe {
         errors
     }
 
-    pub fn read(&self, limit: usize) -> Result<Vec<u8>, Error> {
+    pub fn read(&self, limit: usize) -> Result<Bytes, Error> {
         let children = self.children.borrow_mut();
         children.last().unwrap().read(limit)
     }
 
-    pub fn read_to_end(&self) -> Result<Vec<u8>, Error> {
+    pub fn read_to_end(&self) -> Result<Bytes, Error> {
         let children = self.children.borrow_mut();
         children.last().unwrap().read_to_end()
     }
