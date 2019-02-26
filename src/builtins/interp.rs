@@ -328,12 +328,10 @@ impl Interpreter {
         });
 
         ketos_stdio_reader!(scope, "stdout/read", read_stdout(limit));
-        ketos_stdio_reader!(scope, "stdout/read-string-to-end", read_stdout_string_to_end());
-        ketos_stdio_reader!(scope, "stdout/read-string-to-newline", read_stdout_string_to_newline());
+        ketos_stdio_reader!(scope, "stdout/read-to-newline", read_stdout_to_newline());
         ketos_stdio_reader!(scope, "stdout/read-to-end", read_stdout_to_end());
         ketos_stdio_reader!(scope, "stderr/read", read_stderr(limit));
-        ketos_stdio_reader!(scope, "stderr/read-string-to-end", read_stderr_string_to_end());
-        ketos_stdio_reader!(scope, "stderr/read-string-to-newline", read_stderr_string_to_newline());
+        ketos_stdio_reader!(scope, "stderr/read-to-newline", read_stderr_to_newline());
         ketos_stdio_reader!(scope, "stderr/read-to-end", read_stderr_to_end());
 
         scope.add_value_with_name("write", |name| {

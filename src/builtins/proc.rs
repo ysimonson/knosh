@@ -86,15 +86,7 @@ impl Proc {
         Ok(Bytes::new(buf[..read].to_vec()))
     }
 
-    pub fn read_stdout_string_to_end(&self) -> Result<String, Error> {
-        let mut buf = String::new();
-        let mut child = self.0.borrow_mut();
-        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
-        stdout.read_to_string(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdout: {}", err)))?;
-        Ok(buf)
-    }
-
-    pub fn read_stdout_string_to_newline(&self) -> Result<String, Error> {
+    pub fn read_stdout_to_newline(&self) -> Result<String, Error> {
         let mut buf = String::new();
         let mut child = self.0.borrow_mut();
         let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
@@ -118,15 +110,7 @@ impl Proc {
         Ok(Bytes::new(buf[..read].to_vec()))
     }
 
-    pub fn read_stderr_string_to_end(&self) -> Result<String, Error> {
-        let mut buf = String::new();
-        let mut child = self.0.borrow_mut();
-        let stderr = child.stderr.as_mut().ok_or_else(|| ketos_err("proc stderr not piped"))?;
-        stderr.read_to_string(&mut buf).map_err(|err| ketos_err(format!("could not read string from stderr: {}", err)))?;
-        Ok(buf)
-    }
-
-    pub fn read_stderr_string_to_newline(&self) -> Result<String, Error> {
+    pub fn read_stderr_to_newline(&self) -> Result<String, Error> {
         let mut buf = String::new();
         let mut child = self.0.borrow_mut();
         let stderr = child.stderr.as_mut().ok_or_else(|| ketos_err("proc stderr not piped"))?;

@@ -102,14 +102,9 @@ impl Pipe {
         children.last().unwrap().read_stdout(limit)
     }
 
-    pub fn read_stdout_string_to_end(&self) -> Result<String, Error> {
+    pub fn read_stdout_to_newline(&self) -> Result<String, Error> {
         let children = self.children.borrow_mut();
-        children.last().unwrap().read_stdout_string_to_end()
-    }
-
-    pub fn read_stdout_string_to_newline(&self) -> Result<String, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stdout_string_to_newline()
+        children.last().unwrap().read_stdout_to_newline()
     }
 
     pub fn read_stdout_to_end(&self) -> Result<Bytes, Error> {
@@ -122,14 +117,9 @@ impl Pipe {
         children.last().unwrap().read_stderr(limit)
     }
 
-    pub fn read_stderr_string_to_end(&self) -> Result<String, Error> {
+    pub fn read_stderr_to_newline(&self) -> Result<String, Error> {
         let children = self.children.borrow_mut();
-        children.last().unwrap().read_stderr_string_to_end()
-    }
-
-    pub fn read_stderr_string_to_newline(&self) -> Result<String, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stderr_string_to_newline()
+        children.last().unwrap().read_stderr_to_newline()
     }
 
     pub fn read_stderr_to_end(&self) -> Result<Bytes, Error> {
