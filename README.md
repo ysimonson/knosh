@@ -6,7 +6,7 @@ Keeping the spirit of the lisp machine alive in a frankensteinian combination sh
 
 This is lisp-ey shell replacement, with a few ~~hacks~~features bolted on to make it more usable as a daily driver. The goal is to have about the same level of productivity as bash, but at the same time allow you to scale up the lines of code without your script turning into a giant bag of string-escaping mush.
 
-Underlying knosh is [ketos](https://github.com/murarth/ketos), a minimalistic lisp designed for easy embedding. Knosh is not meant to be a backwards-compatible replacement to existing shell languages, though most of the commands you're used to running in bash work the same.
+Underlying knosh is [ketos](https://github.com/murarth/ketos), a minimalistic lisp designed for ease of embeddability.
 
 The name in shorthand for the [knolling](https://en.wikipedia.org/wiki/Tom_Sachs_\(artist\)#Knolling) shell. Or maybe the ketos non-shell.
 
