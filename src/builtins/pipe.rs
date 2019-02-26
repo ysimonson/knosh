@@ -70,11 +70,6 @@ impl Pipe {
         }
     }
 
-    pub fn children(&self) -> Vec<Proc> {
-        let mut children = self.children.borrow_mut();
-        children.drain(..).collect()
-    }
-
     pub fn wait(&self) -> Vec<Error> {
         let mut threads = self.threads.borrow_mut();
         let mut errors = Vec::new();

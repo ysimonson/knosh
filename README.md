@@ -104,7 +104,6 @@ Functions:
 * `(| p1:ProcPromise, ..., pn:ProcPromise) -> PipePromise`: Creates a promise to execute a pipe with the given proc promises.
 * `(spawn p:PipePromise [stdio]) -> Pipe`: Executes a proc promise with the given stdio, returning a handle to the pipe. `stdio` is the same as those documented above for procs.
 * `(wait p:Pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
-* `(pipe/children p:Pipe)`: Returns the member procs of the pipe.
 
 ### Subinterps
 

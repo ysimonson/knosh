@@ -355,10 +355,6 @@ impl Interpreter {
                 Ok(PipePromise::new(ps?).into())
             })
         });
-
-        ketos_closure!(scope, "pipe/children", |pipe: &Pipe| -> Vec<Proc> {
-            Ok(pipe.children())
-        });
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
