@@ -62,7 +62,7 @@ impl Proc {
     pub fn wait(&self) -> Result<ExitStatus, Error> {
         match self.0.borrow_mut().wait() {
             Ok(status) => Ok(ExitStatus::new(status)),
-            Err(err) => Err(ketos_err(format!("could not wait for child: {}", err))),
+            Err(err) => Err(ketos_err(format!("could not wait for proc: {}", err))),
         }
     }
 
@@ -70,7 +70,7 @@ impl Proc {
         match self.0.borrow_mut().try_wait() {
             Ok(Some(status)) => Ok(Some(ExitStatus::new(status))),
             Ok(None) => Ok(None),
-            Err(err) => Err(ketos_err(format!("could not wait for child: {}", err))),
+            Err(err) => Err(ketos_err(format!("could not wait for proc: {}", err))),
         }
     }
 
@@ -80,28 +80,28 @@ impl Proc {
 
     pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
         let mut child = self.0.borrow_mut();
-        let stdin = child.stdin.as_mut().expect("failed to get child stdin");
+        let stdin = child.stdin.as_mut().expect("failed to get proc stdin");
         stdin
             .write_all(bytes)
-            .map_err(|err| ketos_err(format!("could not write to child: {}", err)))
+            .map_err(|err| ketos_err(format!("could not write for proc: {}", err)))
     }
 
     #[cfg(unix)]
     pub fn stdin_fd(&self) -> i32 {
         let child = self.0.borrow();
-        child.stdin.as_ref().expect("failed to get child stdin").as_raw_fd()
+        child.stdin.as_ref().expect("failed to get proc stdin").as_raw_fd()
     }
 
     #[cfg(unix)]
     pub fn stdout_fd(&self) -> i32 {
         let child = self.0.borrow();
-        child.stdout.as_ref().expect("failed to get child stdout").as_raw_fd()
+        child.stdout.as_ref().expect("failed to get proc stdout").as_raw_fd()
     }
 
     #[cfg(unix)]
     pub fn stderr_fd(&self) -> i32 {
         let child = self.0.borrow();
-        child.stderr.as_ref().expect("failed to get child stderr").as_raw_fd()
+        child.stderr.as_ref().expect("failed to get proc stderr").as_raw_fd()
     }
 
     pub fn take_stdout(&self) -> Option<process::ChildStdout> {
