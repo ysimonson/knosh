@@ -154,10 +154,29 @@ impl Interpreter {
             process::exit(code);
         });
 
-        ketos_closure!(scope, "cd", |dir: &str| -> OsString {
+        scope.add_value_with_name("d", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Range(0, 1), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+
+                let expanded = if let Some(value) = iter.next() {
+                    let dir = <&str>::from_value_ref(value)?;
+                    let expanded = util::expand_path(dir)?;
+                    env::set_current_dir(expanded.clone()).map_err(|err| ketos_err(format!("{}: {}", dir, err)))?;
+                    expanded
+                } else {
+                    env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?
+                };
+
+                Ok(expanded.into_os_string().into())
+            })
+        });
+
+        ketos_closure!(scope, "cd", |dir: &str| -> () {
             let expanded = util::expand_path(dir)?;
             env::set_current_dir(expanded.clone()).map_err(|err| ketos_err(format!("{}: {}", dir, err)))?;
-            Ok(expanded.into_os_string())
+            Ok(())
         });
 
         ketos_closure!(scope, "pwd", || -> OsString {

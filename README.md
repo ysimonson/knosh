@@ -142,7 +142,8 @@ Functions:
 ### Paths
 
 Functions:
-* `(cd dir:string) -> string`: Changes the current working directory and returns the new absolute path.
+* `(d [dir:string]) -> string`: If an argument is passed, this changes the current working directory. Afterwards, it returns the current working directory as an absolute path.
+* `(cd dir:string) -> string`: Changes the current working directory.
 * `(pwd) -> string`: Returns the current working directory as an absolute path.
 
 ### Traps
