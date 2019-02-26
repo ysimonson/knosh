@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 #[cfg(unix)]
@@ -78,30 +78,49 @@ impl Proc {
         self.0.borrow().id()
     }
 
+    pub fn read(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::with_capacity(limit);
+        let mut child = self.0.borrow_mut();
+        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
+        let read = stdout.read(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
+        Ok(buf[..read].to_vec())
+    }
+
+    pub fn read_to_end(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+        let mut child = self.0.borrow_mut();
+        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
+        let read = stdout.read_to_end(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
+        Ok(buf[..read].to_vec())
+    }
+
     pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
         let mut child = self.0.borrow_mut();
-        let stdin = child.stdin.as_mut().expect("failed to get proc stdin");
+        let stdin = child.stdin.as_mut().ok_or_else(|| ketos_err("proc stdin not piped"))?;
         stdin
             .write_all(bytes)
             .map_err(|err| ketos_err(format!("could not write for proc: {}", err)))
     }
 
     #[cfg(unix)]
-    pub fn stdin_fd(&self) -> i32 {
+    pub fn stdin_fd(&self) -> Result<i32, Error> {
         let child = self.0.borrow();
-        child.stdin.as_ref().expect("failed to get proc stdin").as_raw_fd()
+        let stdin = child.stdin.as_ref().ok_or_else(|| ketos_err("proc stdin not piped"))?;
+        Ok(stdin.as_raw_fd())
     }
 
     #[cfg(unix)]
-    pub fn stdout_fd(&self) -> i32 {
+    pub fn stdout_fd(&self) -> Result<i32, Error> {
         let child = self.0.borrow();
-        child.stdout.as_ref().expect("failed to get proc stdout").as_raw_fd()
+        let stdout = child.stdout.as_ref().ok_or_else(|| ketos_err("proc stdout not piped"))?;
+        Ok(stdout.as_raw_fd())
     }
 
     #[cfg(unix)]
-    pub fn stderr_fd(&self) -> i32 {
+    pub fn stderr_fd(&self) -> Result<i32, Error> {
         let child = self.0.borrow();
-        child.stderr.as_ref().expect("failed to get proc stderr").as_raw_fd()
+        let stderr = child.stderr.as_ref().ok_or_else(|| ketos_err("proc stderr not piped"))?;
+        Ok(stderr.as_raw_fd())
     }
 
     pub fn take_stdout(&self) -> Option<process::ChildStdout> {

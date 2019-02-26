@@ -206,7 +206,8 @@ impl Interpreter {
                 check_arity(Arity::Range(1, 4), args.len(), name)?;
 
                 let mut iter = (&*args).iter();
-                let p = <&ProcPromise>::from_value_ref(iter.next().unwrap())?;
+
+                let p = iter.next().unwrap();
                 let stdio = iter.collect::<Vec<&Value>>();
 
                 let (stdin, stdout, stderr) = match stdio.as_slice() {
@@ -227,7 +228,13 @@ impl Interpreter {
                     }
                 };
 
-                Ok(p.spawn(stdin, stdout, stderr)?.into())
+                if let Ok(p) = <&ProcPromise>::from_value_ref(p) {
+                    Ok(p.spawn(stdin, stdout, stderr)?.into())
+                } else if let Ok(p) = <&PipePromise>::from_value_ref(p) {
+                    Ok(p.spawn(stdin, stdout, stderr)?.into())
+                } else {
+                    return Err(type_error("writeable", p));
+                }
             })
         });
 
@@ -256,7 +263,7 @@ impl Interpreter {
                     p.wait()?;
                     Ok(().into())
                 } else {
-                    return Err(type_error("waitable", value));
+                    Err(type_error("waitable", value))
                 }
             })
         });
@@ -280,8 +287,57 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "write", |child: &Proc, bytes: &[u8]| -> () {
-            child.write(bytes)
+        scope.add_value_with_name("read", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(2), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = iter.next().unwrap();
+                let limit = usize::from_value_ref(iter.next().unwrap())?;
+
+                if let Ok(p) = <&Proc>::from_value_ref(p) {
+                    Ok(p.read(limit)?.into())
+                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
+                    Ok(p.read(limit)?.into())
+                } else {
+                    Err(type_error("readable", p))
+                }
+            })
+        });
+
+        scope.add_value_with_name("read-to-end", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(1), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = iter.next().unwrap();
+
+                if let Ok(p) = <&Proc>::from_value_ref(p) {
+                    Ok(p.read_to_end()?.into())
+                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
+                    Ok(p.read_to_end()?.into())
+                } else {
+                    Err(type_error("readable", p))
+                }
+            })
+        });
+
+        scope.add_value_with_name("write", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(2), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let p = iter.next().unwrap();
+                let bytes = <&[u8]>::from_value_ref(iter.next().unwrap())?;
+
+                if let Ok(p) = <&Proc>::from_value_ref(p) {
+                    Ok(p.write(bytes)?.into())
+                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
+                    Ok(p.write(bytes)?.into())
+                } else {
+                    Err(type_error("writeable", p))
+                }
+            })
         });
 
         #[cfg(unix)]
@@ -293,7 +349,7 @@ impl Interpreter {
 
                 if let Some(value) = iter.next() {
                     let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stdin_fd().into())
+                    Ok(child.stdin_fd()?.into())
                 } else {
                     Ok(io::stdin().as_raw_fd().into())
                 }
@@ -309,7 +365,7 @@ impl Interpreter {
 
                 if let Some(value) = iter.next() {
                     let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stdout_fd().into())
+                    Ok(child.stdout_fd()?.into())
                 } else {
                     Ok(io::stdout().as_raw_fd().into())
                 }
@@ -325,7 +381,7 @@ impl Interpreter {
 
                 if let Some(value) = iter.next() {
                     let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stderr_fd().into())
+                    Ok(child.stderr_fd()?.into())
                 } else {
                     Ok(io::stderr().as_raw_fd().into())
                 }

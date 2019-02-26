@@ -37,7 +37,7 @@ impl PipePromise {
         }
 
         spawned_children.push(children[children.len() - 1].spawn(1, stdout, stderr)?);
-        Ok(Pipe::new(spawned_children))
+        Pipe::new(spawned_children)
     }
 }
 
@@ -48,7 +48,11 @@ pub struct Pipe {
 }
 
 impl Pipe {
-    pub fn new(children: Vec<Proc>) -> Self {
+    pub fn new(children: Vec<Proc>) -> Result<Self, Error> {
+        if children.len() < 2 {
+            return Err(ketos_err("pipe must have at least two children"));
+        }
+
         let mut threads = Vec::new();
 
         for i in 1..children.len() {
@@ -64,10 +68,12 @@ impl Pipe {
             }));
         }
 
-        Self {
+        let pipe = Self {
             children: RefCell::new(children),
             threads: RefCell::new(threads),
-        }
+        };
+
+        Ok(pipe)
     }
 
     pub fn wait(&self) -> Vec<Error> {
@@ -89,5 +95,20 @@ impl Pipe {
         }
 
         errors
+    }
+
+    pub fn read(&self, limit: usize) -> Result<Vec<u8>, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read(limit)
+    }
+
+    pub fn read_to_end(&self) -> Result<Vec<u8>, Error> {
+        let children = self.children.borrow_mut();
+        children.last().unwrap().read_to_end()
+    }
+
+    pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
+        let children = self.children.borrow_mut();
+        children.first().unwrap().write(bytes)
     }
 }
