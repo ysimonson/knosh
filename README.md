@@ -77,7 +77,13 @@ Functions:
 * `(exit/code s:ExitStatus) -> integer|()`: If the proc had an exit code, this returns that code. Otherwise it returns the unit value.
 * `(exit/signal s:ExitStatus) -> integer|()`: If the proc was terminated by a signal, this returns that signal. Otherwise it returns the unit value.
 * `(pid p:Proc) -> integer`: Returns the proc's pid.
-* `(write p:Proc, bytes:bytestring)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
+* `(stdout/read p:Proc limit:integer) -> bytes`: Reads up to `limit` bytes from `p`'s stdout.
+* `(stdout/read-to-newline p:Proc) -> string`: Reads up to the next newline from `p`'s stdout, returning the decoded string.
+* `(stdout/read-to-end p:Proc) -> bytes`: Reads from `p`'s stdout until EOF.
+* `(stderr/read p:Proc) -> bytes`: Reads up to `limit` bytes from `p`'s stderr.
+* `(stderr/read-to-newline p:Proc) -> string`: Reads up to the next newline from `p`'s stderr, returning the decoded string.
+* `(stderr/read-to-end p:Proc) -> bytes`: Reads from `p`'s stderr until EOF.
+* `(write p:Proc, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
 * `(stdin/fd p:Proc) -> integer`: Returns the proc's stdin fd.
 * `(stdout/fd p:Proc) -> integer`: Returns the proc's stdout fd.
 * `(stderr/fd p:Proc) -> integer`: Returns the proc's stderr fd.
@@ -104,6 +110,13 @@ Functions:
 * `(| p1:ProcPromise, ..., pn:ProcPromise) -> PipePromise`: Creates a promise to execute a pipe with the given proc promises.
 * `(spawn p:PipePromise [stdio]) -> Pipe`: Executes a proc promise with the given stdio, returning a handle to the pipe. `stdio` is the same as those documented above for procs.
 * `(wait p:Pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
+* `(stdout/read p:Pipe limit:integer) -> bytes`: Reads up to `limit` bytes from `p`'s last child's stdout.
+* `(stdout/read-to-newline p:Pipe) -> string`: Reads up to the next newline from `p`'s last child's stdout, returning the decoded string.
+* `(stdout/read-to-end p:Pipe) -> bytes`: Reads from `p`'s last child's stdout until EOF.
+* `(stderr/read p:Pipe) -> bytes`: Reads up to `limit` bytes from `p`'s last child's stderr.
+* `(stderr/read-to-newline p:Pipe) -> string`: Reads up to the next newline from `p`'s last child's stderr, returning the decoded string.
+* `(stderr/read-to-end p:Pipe) -> bytes`: Reads from `p`'s last child's stderr until EOF.
+* `(write p:Pipe, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
 
 ### Subinterps
 
