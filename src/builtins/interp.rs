@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::io::{self, BufRead};
 use std::process;
 use std::rc::Rc;
 use std::usize;
@@ -353,7 +353,13 @@ impl Interpreter {
         ketos_stdio_reader!(scope, "stderr/read-to-newline", read_stderr_to_newline());
         ketos_stdio_reader!(scope, "stderr/read-to-end", read_stderr_to_end());
 
-        scope.add_value_with_name("write", |name| {
+        ketos_closure!(scope, "stdin/read-to-newline", || -> String {
+            let mut buf = String::new();
+            io::BufReader::new(io::stdin()).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdin: {}", err)))?;
+            Ok(buf.into())
+        });
+
+        scope.add_value_with_name("stdin/write", |name| {
             Value::new_foreign_fn(name, move |_, args| {
                 check_arity(Arity::Exact(2), args.len(), name)?;
 

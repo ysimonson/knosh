@@ -83,7 +83,7 @@ Functions:
 * `(stderr/read p:Proc) -> bytes`: Reads up to `limit` bytes from `p`'s stderr.
 * `(stderr/read-to-newline p:Proc) -> string`: Reads up to the next newline from `p`'s stderr, returning the decoded string.
 * `(stderr/read-to-end p:Proc) -> bytes`: Reads from `p`'s stderr until EOF.
-* `(write p:Proc, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
+* `(stdin/write p:Proc, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
 * `(stdin/fd p:Proc) -> integer`: Returns the proc's stdin fd.
 * `(stdout/fd p:Proc) -> integer`: Returns the proc's stdout fd.
 * `(stderr/fd p:Proc) -> integer`: Returns the proc's stderr fd.
@@ -166,6 +166,7 @@ Values:
 Functions:
 * `(exit code:integer)`: exits the shell with the given code
 * `(pid) -> integer`: Returns the shell's pid.
+* `(stdin/read-to-newline)`: Reads from the shell's stdin until a newline, returning a string.
 * `(stdin/fd) -> integer`: Returns the shell's stdin fd.
 * `(stdout/fd) -> integer`: Returns the shell's stdout fd.
 * `(stderr/fd) -> integer`: Returns the shell's stderr fd.
