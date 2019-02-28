@@ -98,13 +98,6 @@ Procs can also be piped like so:
 Functions:
 * `(| p1:proc, ..., pn:proc) -> pipe`: Executes a pipe with the given procs.
 * `(wait p:pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
-* `(stdout/read p:pipe limit:integer) -> bytes`: Reads up to `limit` bytes from `p`'s last child's stdout.
-* `(stdout/read-to-newline p:pipe) -> string`: Reads up to the next newline from `p`'s last child's stdout, returning the decoded string.
-* `(stdout/read-to-end p:pipe) -> bytes`: Reads from `p`'s last child's stdout until EOF.
-* `(stderr/read p:pipe) -> bytes`: Reads up to `limit` bytes from `p`'s last child's stderr.
-* `(stderr/read-to-newline p:pipe) -> string`: Reads up to the next newline from `p`'s last child's stderr, returning the decoded string.
-* `(stderr/read-to-end p:pipe) -> bytes`: Reads from `p`'s last child's stderr until EOF.
-* `(write p:pipe, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
 
 ### Subinterps
 

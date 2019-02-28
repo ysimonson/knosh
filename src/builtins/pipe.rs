@@ -2,19 +2,18 @@ use std::cell::RefCell;
 use std::io;
 use std::thread;
 
-use ketos::{Bytes, Error};
+use ketos::Error;
 
 use super::Proc;
 use crate::error::ketos_err;
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct Pipe {
-    children: RefCell<Vec<Proc>>,
     threads: RefCell<Vec<thread::JoinHandle<Result<(), io::Error>>>>,
 }
 
 impl Pipe {
-    pub fn new(children: Vec<Proc>) -> Result<Self, Error> {
+    pub fn new(children: Vec<&Proc>) -> Result<Self, Error> {
         if children.len() < 2 {
             return Err(ketos_err("pipe must have at least two children"));
         }
@@ -35,8 +34,7 @@ impl Pipe {
         }
 
         let pipe = Self {
-            children: RefCell::new(children),
-            threads: RefCell::new(threads),
+            threads: RefCell::new(threads)
         };
 
         Ok(pipe)
@@ -61,40 +59,5 @@ impl Pipe {
         }
 
         errors
-    }
-
-    pub fn read_stdout(&self, limit: usize) -> Result<Bytes, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stdout(limit)
-    }
-
-    pub fn read_stdout_to_newline(&self) -> Result<String, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stdout_to_newline()
-    }
-
-    pub fn read_stdout_to_end(&self) -> Result<Bytes, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stdout_to_end()
-    }
-
-     pub fn read_stderr(&self, limit: usize) -> Result<Bytes, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stderr(limit)
-    }
-
-    pub fn read_stderr_to_newline(&self) -> Result<String, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stderr_to_newline()
-    }
-
-    pub fn read_stderr_to_end(&self) -> Result<Bytes, Error> {
-        let children = self.children.borrow_mut();
-        children.last().unwrap().read_stderr_to_end()
-    }
-
-    pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
-        let children = self.children.borrow_mut();
-        children.first().unwrap().write(bytes)
     }
 }

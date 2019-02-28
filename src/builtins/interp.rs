@@ -14,7 +14,7 @@ use std::os::unix::io::AsRawFd;
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
-use ketos::{FromValue, Error, Integer, Interpreter as KetosInterpreter, Name, Value};
+use ketos::{Bytes, Error, Integer, Interpreter as KetosInterpreter, Name, Value};
 use linefeed::Signal;
 
 #[cfg(unix)]
@@ -23,46 +23,6 @@ use nix::unistd::{fork, ForkResult};
 use super::{ExitStatus, Pipe, Proc, SubInterp, TrapMap};
 use crate::error::ketos_err;
 use crate::util;
-
-macro_rules! ketos_stdio_reader {
-    ($scope:expr, $name:expr, $f:ident ( limit ) ) => (
-        $scope.add_value_with_name($name, |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Exact(2), args.len(), name)?;
-
-                let mut iter = (&*args).iter();
-                let p = iter.next().unwrap();
-                let limit = usize::from_value_ref(iter.next().unwrap())?;
-
-                if let Ok(p) = <&Proc>::from_value_ref(p) {
-                    Ok(p.$f(limit)?.into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
-                    Ok(p.$f(limit)?.into())
-                } else {
-                    Err(type_error("readable", p))
-                }
-            })
-        });
-    );
-    ($scope:expr, $name:expr, $f:ident ( ) ) => (
-        $scope.add_value_with_name($name, |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Exact(1), args.len(), name)?;
-
-                let mut iter = (&*args).iter();
-                let p = iter.next().unwrap();
-
-                if let Ok(p) = <&Proc>::from_value_ref(p) {
-                    Ok(p.$f()?.into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
-                    Ok(p.$f()?.into())
-                } else {
-                    Err(type_error("readable", p))
-                }
-            })
-        });
-    )
-}
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
@@ -284,8 +244,8 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "poll", |child: &Proc| -> Option<ExitStatus> {
-            child.poll()
+        ketos_closure!(scope, "poll", |p: &Proc| -> Option<ExitStatus> {
+            p.poll()
         });
 
         scope.add_value_with_name("pid", |name| {
@@ -295,20 +255,37 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.pid().into())
+                    let p = <&Proc>::from_value_ref(value)?;
+                    Ok(p.pid().into())
                 } else {
                     Ok(process::id().into())
                 }
             })
         });
 
-        ketos_stdio_reader!(scope, "stdout/read", read_stdout(limit));
-        ketos_stdio_reader!(scope, "stdout/read-to-newline", read_stdout_to_newline());
-        ketos_stdio_reader!(scope, "stdout/read-to-end", read_stdout_to_end());
-        ketos_stdio_reader!(scope, "stderr/read", read_stderr(limit));
-        ketos_stdio_reader!(scope, "stderr/read-to-newline", read_stderr_to_newline());
-        ketos_stdio_reader!(scope, "stderr/read-to-end", read_stderr_to_end());
+        ketos_closure!(scope, "stdout/read", |p: &Proc, limit: usize| -> Bytes {
+            p.read_stdout(limit)
+        });
+
+        ketos_closure!(scope, "stdout/read-to-newline", |p: &Proc| -> String {
+            p.read_stdout_to_newline()
+        });
+
+        ketos_closure!(scope, "stdout/read-to-end", |p: &Proc| -> Bytes {
+            p.read_stdout_to_end()
+        });
+
+        ketos_closure!(scope, "stderr/read", |p: &Proc, limit: usize| -> Bytes {
+            p.read_stderr(limit)
+        });
+
+        ketos_closure!(scope, "stderr/read-to-newline", |p: &Proc| -> String {
+            p.read_stderr_to_newline()
+        });
+
+        ketos_closure!(scope, "stderr/read-to-end", |p: &Proc| -> Bytes {
+            p.read_stderr_to_end()
+        });
 
         ketos_closure!(scope, "stdin/read-to-newline", || -> String {
             let mut buf = String::new();
@@ -316,22 +293,8 @@ impl Interpreter {
             Ok(buf.into())
         });
 
-        scope.add_value_with_name("stdin/write", |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Exact(2), args.len(), name)?;
-
-                let mut iter = (&*args).iter();
-                let p = iter.next().unwrap();
-                let bytes = <&[u8]>::from_value_ref(iter.next().unwrap())?;
-
-                if let Ok(p) = <&Proc>::from_value_ref(p) {
-                    Ok(p.write(bytes)?.into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(p) {
-                    Ok(p.write(bytes)?.into())
-                } else {
-                    Err(type_error("writeable", p))
-                }
-            })
+        ketos_closure!(scope, "stdin/write", |p: &Proc, bytes: &[u8]| -> () {
+            Ok(p.write(bytes)?.into())
         });
 
         #[cfg(unix)]
@@ -342,8 +305,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stdin_fd()?.into())
+                    let p = <&Proc>::from_value_ref(value)?;
+                    Ok(p.stdin_fd()?.into())
                 } else {
                     Ok(io::stdin().as_raw_fd().into())
                 }
@@ -358,8 +321,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stdout_fd()?.into())
+                    let p = <&Proc>::from_value_ref(value)?;
+                    Ok(p.stdout_fd()?.into())
                 } else {
                     Ok(io::stdout().as_raw_fd().into())
                 }
@@ -374,8 +337,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let child = <&Proc>::from_value_ref(value)?;
-                    Ok(child.stderr_fd()?.into())
+                    let p = <&Proc>::from_value_ref(value)?;
+                    Ok(p.stderr_fd()?.into())
                 } else {
                     Ok(io::stderr().as_raw_fd().into())
                 }
@@ -399,11 +362,12 @@ impl Interpreter {
             pipe_name,
             Value::new_foreign_fn(pipe_name, move |_, args| {
                 check_arity(Arity::Min(2), args.len(), pipe_name)?;
-                let mut args = args.to_vec();
-                let drained = args.drain(..); //TODO: does this copy?
 
-                let ps: Result<Vec<Proc>, ExecError> =
-                    drained.into_iter().map(|arg| Proc::from_value(arg)).collect();
+                let iter = (&*args).iter();
+
+                let ps: Result<Vec<&Proc>, ExecError> = iter.map(|arg| {
+                    <&Proc>::from_value_ref(arg)
+                }).collect();
 
                 Ok(Pipe::new(ps?)?.into())
             }),
