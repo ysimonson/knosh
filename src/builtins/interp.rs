@@ -5,6 +5,8 @@ use std::io::{self, BufRead};
 use std::process;
 use std::rc::Rc;
 use std::usize;
+use std::slice::Iter;
+use std::os::unix::process::CommandExt;
 
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
@@ -12,13 +14,13 @@ use std::os::unix::io::AsRawFd;
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
-use ketos::{Error, Integer, Interpreter as KetosInterpreter, Name, Value};
+use ketos::{FromValue, Error, Integer, Interpreter as KetosInterpreter, Name, Value};
 use linefeed::Signal;
 
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult};
 
-use super::{ExitStatus, Pipe, PipePromise, Proc, ProcPromise, SubInterp, TrapMap};
+use super::{ExitStatus, Pipe, Proc, SubInterp, TrapMap};
 use crate::error::ketos_err;
 use crate::util;
 
@@ -64,16 +66,18 @@ macro_rules! ketos_stdio_reader {
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
-    pub proc_name: Name,
+    pub pipe_name: Name,
+    pub spawn_name: Name,
+    pub spawn_with_stdio_name: Name,
     traps: [Rc<TrapMap>; 5],
     is_root: bool,
 }
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
-        let proc_name = {
+        let (pipe_name, spawn_name, spawn_with_stdio_name) = {
             let scope = interp.scope();
-            scope.add_name("proc")
+            (scope.add_name("|"), scope.add_name("spawn"), scope.add_name("spawn-with-stdio"))
         };
 
         let traps = [
@@ -86,7 +90,9 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
-            proc_name,
+            pipe_name,
+            spawn_name,
+            spawn_with_stdio_name,
             traps,
             is_root,
         }
@@ -100,7 +106,9 @@ impl Interpreter {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
         let interp_fork = self.interp.clone();
-        let proc_name = self.proc_name;
+        let pipe_name = self.pipe_name;
+        let spawn_name = self.spawn_name;
+        let spawn_with_stdio_name = self.spawn_with_stdio_name;
 
         for trap in self.traps.iter() {
             scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
@@ -212,93 +220,42 @@ impl Interpreter {
         });
 
         scope.add_value(
-            proc_name,
-            Value::new_foreign_fn(proc_name, move |_, args| {
-                check_arity(Arity::Min(1), args.len(), proc_name)?;
-
-                let mut iter = (&*args).iter();
-                let value = iter.next().unwrap();
-
-                let name = match value {
-                    Value::String(v) => format!("{}", v).into(),
-                    Value::Bytes(v) if cfg!(unix) => {
-                        use std::os::unix::ffi::OsStringExt;
-                        let bytes = v.clone().into_bytes();
-                        OsString::from_vec(bytes)
-                    }
-                    Value::Path(v) => v.clone().into_os_string(),
-                    _ => {
-                        return Err(ketos_err(format!(
-                            "cannot use non-stringifiable value as a proc name: `{:?}`",
-                            value
-                        )));
-                    }
-                };
-
-                let args_str: Result<Vec<OsString>, Error> = iter
-                    .map(|value| match value {
-                        Value::Bool(v) => Ok(format!("{}", v).into()),
-                        Value::Float(v) => Ok(format!("{}", v).into()),
-                        Value::Integer(v) => Ok(format!("{}", v).into()),
-                        Value::Ratio(v) => Ok(format!("{}", v).into()),
-                        Value::Char(v) => Ok(format!("{}", v).into()),
-                        Value::String(v) => Ok(format!("{}", v).into()),
-                        Value::Bytes(v) if cfg!(unix) => {
-                            use std::os::unix::ffi::OsStringExt;
-                            let bytes = v.clone().into_bytes();
-                            Ok(OsString::from_vec(bytes))
-                        }
-                        Value::Path(v) => Ok(v.clone().into_os_string()),
-                        _ => Err(ketos_err(format!(
-                            "cannot use non-stringifiable value as an argument: `{:?}`",
-                            value
-                        ))),
-                    })
-                    .collect();
-
-                Ok(ProcPromise::new(name, args_str?).into())
+            spawn_name,
+            Value::new_foreign_fn(spawn_name, move |_, args| {
+                check_arity(Arity::Min(1), args.len(), spawn_name)?;
+                let iter = (&*args).iter();
+                let (name, args) = proc_args(iter)?;
+                let p = Proc::new(name, args, process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit())?;
+                Ok(p.into())
             }),
         );
 
-        scope.add_value_with_name("spawn", |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Range(1, 4), args.len(), name)?;
-
+        scope.add_value(
+            spawn_with_stdio_name,
+            Value::new_foreign_fn(spawn_with_stdio_name, move |_, args| {
+                check_arity(Arity::Min(4), args.len(), spawn_with_stdio_name)?;
                 let mut iter = (&*args).iter();
-
-                let p = iter.next().unwrap();
-                let stdio = iter.collect::<Vec<&Value>>();
-
-                let (stdin, stdout, stderr) = match stdio.as_slice() {
-                    [] => (0, 0, 0),
-                    [Value::Integer(stdout)] => (0, to_stdio_u8(stdout)?, 0),
-                    [Value::Integer(stdout), Value::Integer(stderr)] => (0, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?),
-                    [Value::Integer(stdin), Value::Integer(stdout), Value::Integer(stderr)] => {
-                        (to_stdio_u8(stdin)?, to_stdio_u8(stdout)?, to_stdio_u8(stderr)?)
-                    }
-                    _ => {
-                        for value in &stdio {
-                            if value.type_name() != "integer" {
-                                return Err(type_error("integer", &value));
-                            }
-                        }
-
-                        unreachable!();
-                    }
-                };
-
-                if let Ok(p) = <&ProcPromise>::from_value_ref(p) {
-                    Ok(p.spawn(stdin, stdout, stderr)?.into())
-                } else if let Ok(p) = <&PipePromise>::from_value_ref(p) {
-                    Ok(p.spawn(stdin, stdout, stderr)?.into())
-                } else {
-                    return Err(type_error("writeable", p));
-                }
-            })
-        });
+                let stdin = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
+                let stdout = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
+                let stderr = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
+                let (name, args) = proc_args(iter)?;
+                let p = Proc::new(name, args, stdin, stdout, stderr)?;
+                Ok(p.into())
+            }),
+        );
 
         #[cfg(unix)]
-        ketos_closure!(scope, "exec", |cmd: &ProcPromise| -> () { cmd.exec() });
+        scope.add_value_with_name("exec", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Min(1), args.len(), spawn_name)?;
+                let iter = (&*args).iter();
+                let (name, args) = proc_args(iter)?;
+                let err = process::Command::new(name)
+                    .args(args)
+                    .exec();
+                Err(ketos_err(format!("{}", err)))
+            })
+        });
 
         scope.add_value_with_name("wait", |name| {
             Value::new_foreign_fn(name, move |_, args| {
@@ -438,16 +395,19 @@ impl Interpreter {
             Ok(status.signal())
         });
 
-        scope.add_value_with_name("|", |name| {
-            Value::new_foreign_fn(name, move |_, args| {
-                check_arity(Arity::Min(2), args.len(), name)?;
+        scope.add_value(
+            pipe_name,
+            Value::new_foreign_fn(pipe_name, move |_, args| {
+                check_arity(Arity::Min(2), args.len(), pipe_name)?;
+                let mut args = args.to_vec();
+                let drained = args.drain(..); //TODO: does this copy?
 
-                let ps: Result<Vec<&ProcPromise>, ExecError> =
-                    args.iter_mut().map(|arg| <&ProcPromise>::from_value_ref(arg)).collect();
+                let ps: Result<Vec<Proc>, ExecError> =
+                    drained.into_iter().map(|arg| Proc::from_value(arg)).collect();
 
-                Ok(PipePromise::new(ps?).into())
-            })
-        });
+                Ok(Pipe::new(ps?)?.into())
+            }),
+        );
     }
 
     pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
@@ -491,13 +451,6 @@ fn check_arity(arity: Arity, len: usize, name: Name) -> Result<(), Error> {
     }
 }
 
-fn to_stdio_u8(i: &Integer) -> Result<u8, Error> {
-    match i.to_u8() {
-        Some(value) if value <= 2 => Ok(value),
-        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
-    }
-}
-
 fn type_error(expected: &'static str, value: &Value) -> Error {
     let err = ExecError::TypeError {
         expected,
@@ -505,4 +458,56 @@ fn type_error(expected: &'static str, value: &Value) -> Error {
         value: None,
     };
     err.into()
+}
+
+fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
+    match i {
+        0 => Ok(process::Stdio::inherit()),
+        1 => Ok(process::Stdio::piped()),
+        2 => Ok(process::Stdio::null()),
+        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i)))
+    }
+}
+
+fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> {
+    let value = iter.next().unwrap();
+
+    let name = match value {
+        Value::String(v) => format!("{}", v).into(),
+        Value::Bytes(v) if cfg!(unix) => {
+            use std::os::unix::ffi::OsStringExt;
+            let bytes = v.clone().into_bytes();
+            OsString::from_vec(bytes)
+        }
+        Value::Path(v) => v.clone().into_os_string(),
+        _ => {
+            return Err(ketos_err(format!(
+                "cannot use non-stringlike as a proc name: `{:?}`",
+                value
+            )));
+        }
+    };
+
+    let args_str: Result<Vec<OsString>, Error> = iter
+        .map(|value| match value {
+            Value::Bool(v) => Ok(format!("{}", v).into()),
+            Value::Float(v) => Ok(format!("{}", v).into()),
+            Value::Integer(v) => Ok(format!("{}", v).into()),
+            Value::Ratio(v) => Ok(format!("{}", v).into()),
+            Value::Char(v) => Ok(format!("{}", v).into()),
+            Value::String(v) => Ok(format!("{}", v).into()),
+            Value::Bytes(v) if cfg!(unix) => {
+                use std::os::unix::ffi::OsStringExt;
+                let bytes = v.clone().into_bytes();
+                Ok(OsString::from_vec(bytes))
+            }
+            Value::Path(v) => Ok(v.clone().into_os_string()),
+            _ => Err(ketos_err(format!(
+                "cannot use non-stringifiable as an argument: `{:?}`",
+                value
+            ))),
+        })
+        .collect();
+
+    Ok((name, args_str?))
 }

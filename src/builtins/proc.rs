@@ -4,59 +4,26 @@ use std::io::{BufReader, BufRead, Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::process;
 
 use ketos::{Bytes, Error};
 
 use crate::error::ketos_err;
 
-#[derive(Clone, Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct ProcPromise {
-    name: OsString,
-    args: Vec<OsString>,
-}
-
-impl ProcPromise {
-    pub fn new(name: OsString, args: Vec<OsString>) -> Self {
-        Self { name, args }
-    }
-
-    fn command(&self) -> process::Command {
-        let mut cmd = process::Command::new(&self.name);
-        cmd.args(self.args.iter());
-        cmd
-    }
-
-    pub fn run(&self) -> Result<(), Error> {
-        let child = self.spawn(0, 0, 0)?;
-        child.wait().map(|_| ())
-    }
-
-    pub fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Proc, Error> {
-        let child = self
-            .command()
-            .stdin(to_stdio_value(stdin)?)
-            .stdout(to_stdio_value(stdout)?)
-            .stderr(to_stdio_value(stderr)?)
-            .spawn()
-            .map_err(|err| ketos_err(format!("{}", err)))?;
-        Ok(Proc::new(child))
-    }
-
-    #[cfg(unix)]
-    pub fn exec(&self) -> Result<(), Error> {
-        let err = self.command().exec();
-        Err(ketos_err(format!("{}", err)))
-    }
-}
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
+#[derive(Debug, ForeignValue, FromValue, FromValueRef, IntoValue)]
 pub struct Proc(RefCell<process::Child>);
 
 impl Proc {
-    pub fn new(child: process::Child) -> Self {
-        Self { 0: RefCell::new(child) }
+    pub fn new(name: OsString, args: Vec<OsString>, stdin: process::Stdio, stdout: process::Stdio, stderr: process::Stdio) -> Result<Self, Error> {
+        let child = process::Command::new(name)
+            .args(args)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .map_err(|err| ketos_err(format!("{}", err)))?;
+        Ok(Self { 0: RefCell::new(child) })
     }
 
     pub fn wait(&self) -> Result<ExitStatus, Error> {
@@ -183,14 +150,5 @@ impl ExitStatus {
     #[cfg(unix)]
     pub fn signal(&self) -> Option<i32> {
         self.0.signal()
-    }
-}
-
-fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
-    match i {
-        0 => Ok(process::Stdio::inherit()),
-        1 => Ok(process::Stdio::piped()),
-        2 => Ok(process::Stdio::null()),
-        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i))),
     }
 }

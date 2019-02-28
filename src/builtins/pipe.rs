@@ -4,42 +4,8 @@ use std::thread;
 
 use ketos::{Bytes, Error};
 
-use super::{Proc, ProcPromise};
+use super::Proc;
 use crate::error::ketos_err;
-
-#[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
-pub struct PipePromise(RefCell<Vec<ProcPromise>>);
-
-impl PipePromise {
-    pub fn new(children: Vec<&ProcPromise>) -> Self {
-        Self {
-            0: RefCell::new(children.into_iter().cloned().collect()),
-        }
-    }
-
-    pub fn run(&self) -> Result<(), Error> {
-        let pipe = self.spawn(0, 0, 0)?;
-
-        if let Some(err) = pipe.wait().pop() {
-            Err(err)
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn spawn(&self, stdin: u8, stdout: u8, stderr: u8) -> Result<Pipe, Error> {
-        let children = self.0.borrow_mut();
-        debug_assert!(children.len() >= 2);
-        let mut spawned_children = vec![children[0].spawn(stdin, 1, stderr)?];
-
-        for child in children.iter().take(children.len() - 2).skip(1) {
-            spawned_children.push(child.spawn(1, 1, stderr)?)
-        }
-
-        spawned_children.push(children[children.len() - 1].spawn(1, stdout, stderr)?);
-        Pipe::new(spawned_children)
-    }
-}
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct Pipe {

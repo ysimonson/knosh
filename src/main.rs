@@ -27,6 +27,7 @@ use ketos::io::{IoError, IoMode};
 use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use linefeed::{Command, Interface, ReadResult, Signal};
 
+use crate::error::ketos_err;
 use crate::tui::{is_parseable, Accepter, Completer};
 
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
@@ -320,14 +321,25 @@ pub fn print_execution_result(
 ) -> bool {
     match executor::exprs(interp, line, path) {
         Ok(Some((input_value, output_value))) => {
-            if let Ok(p) = <&builtins::ProcPromise>::from_value_ref(&output_value) {
-                if let Err(err) = p.run() {
-                    display_error(&interp, error_prefix, &err);
-                    return false;
+            if let Ok(p) = <&builtins::Proc>::from_value_ref(&output_value) {
+                match p.wait() {
+                    Ok(exit_code) => {
+                        if !exit_code.success() {
+                            let err = ketos_err(format!("proc did not exit successfully: {:?}", exit_code));
+                            display_error(&interp, error_prefix, &err);
+                            return false;
+                        }
+                    },
+                    Err(err) => {
+                        display_error(&interp, error_prefix, &err);
+                        return false;
+                    }
                 }
-            } else if let Ok(p) = <&builtins::PipePromise>::from_value_ref(&output_value) {
-                if let Err(err) = p.run() {
-                    display_error(&interp, error_prefix, &err);
+            } else if let Ok(p) = <&builtins::Pipe>::from_value_ref(&output_value) {
+                let errs = p.wait();
+
+                if !errs.is_empty() {
+                    display_error(&interp, error_prefix, errs.first().unwrap());
                     return false;
                 }
             } else if let Value::Unit = output_value {
@@ -354,18 +366,29 @@ pub fn print_execution_result(
 fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Completer>, input_value: Value) {
     if let Value::List(list) = input_value {
         let mut iter = list.iter();
-        let first_value = iter.next();
-        let second_value = iter.next();
 
-        if let (Some(Value::Name(first_name)), Some(Value::String(cmd))) = (first_value, second_value) {
-            if first_name == &interp.proc_name {
-                // This is a proc call - process the arguments
-                for value in iter {
-                    if let Value::String(arg) = value {
-                        completer.add_arg(&cmd, &arg);
+        match iter.next() {
+            Some(Value::Name(first_name)) if first_name == &interp.spawn_name => {
+                if let Some(Value::String(cmd)) = iter.next() {
+                    for value in iter {
+                        if let Value::String(arg) = value {
+                            completer.add_arg(&cmd, &arg);
+                        }
                     }
                 }
-            }
+            },
+            Some(Value::Name(first_name)) if first_name == &interp.spawn_with_stdio_name => {
+                let mut iter = iter.skip(3);
+
+                if let Some(Value::String(cmd)) = iter.next() {
+                    for value in iter {
+                        if let Value::String(arg) = value {
+                            completer.add_arg(&cmd, &arg);
+                        }
+                    }
+                }
+            },
+            _ => {}
         }
     }
 }
