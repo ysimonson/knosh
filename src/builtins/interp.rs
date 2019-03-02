@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead};
@@ -17,7 +17,8 @@ use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
 use ketos::{Bytes, Error, Integer, Interpreter as KetosInterpreter, Name, Value};
-use linefeed::Signal;
+use signal_hook;
+use signal_hook::iterator::Signals;
 
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult};
@@ -26,37 +27,57 @@ use super::{ExitStatus, Pipe, Proc, SubInterp, TrapMap};
 use crate::error::ketos_err;
 use crate::util;
 
+const REGISTERED_SIGNALS: [(&str, i32); 17] = [
+    ("signal/abrt", signal_hook::SIGABRT),
+    ("signal/alrm", signal_hook::SIGALRM),
+    ("signal/bus", signal_hook::SIGBUS),
+    ("signal/chld", signal_hook::SIGCHLD),
+    ("signal/cont", signal_hook::SIGCONT),
+    ("signal/hup", signal_hook::SIGHUP),
+    ("signal/int", signal_hook::SIGINT),
+    ("signal/io", signal_hook::SIGIO),
+    ("signal/pipe", signal_hook::SIGPIPE),
+    ("signal/prof", signal_hook::SIGPROF),
+    ("signal/quit", signal_hook::SIGQUIT),
+    ("signal/sys", signal_hook::SIGSYS),
+    ("signal/term", signal_hook::SIGTERM),
+    ("signal/trap", signal_hook::SIGTRAP),
+    ("signal/usr1", signal_hook::SIGUSR1),
+    ("signal/usr2", signal_hook::SIGUSR2),
+    ("signal/winch", signal_hook::SIGWINCH),
+];
+
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
     pipe_name: Name,
     pub spawn_name: Name,
     pub spawn_with_stdio_name: Name,
-    traps: [Rc<TrapMap>; 5],
-    is_root: bool,
+    signals: Signals,
+    traps: Rc<HashMap<i32, TrapMap>>,
 }
 
 impl Interpreter {
-    pub fn new(interp: KetosInterpreter, is_root: bool) -> Self {
+    pub fn new(interp: KetosInterpreter) -> Self {
         let (pipe_name, spawn_name, spawn_with_stdio_name) = {
             let scope = interp.scope();
             (scope.add_name("|"), scope.add_name("spawn"), scope.add_name("spawn-with-stdio"))
         };
 
-        let traps = [
-            Rc::new(TrapMap::new("signal/continue", 0)),
-            Rc::new(TrapMap::new("signal/interrupt", 1)),
-            Rc::new(TrapMap::new("signal/quit", 2)),
-            Rc::new(TrapMap::new("signal/resize", 3)),
-            Rc::new(TrapMap::new("signal/suspend", 4)),
-        ];
+        let mut signums = Vec::new();
+        let mut traps = HashMap::new();
+
+        for (_, signum) in &REGISTERED_SIGNALS {
+            signums.push(*signum);
+            traps.insert(*signum, TrapMap::default());
+        }
 
         Self {
             interp: Rc::new(interp),
             pipe_name,
             spawn_name,
             spawn_with_stdio_name,
-            traps,
-            is_root,
+            signals: Signals::new(signums).expect("could not register signal listeners"),
+            traps: Rc::new(traps),
         }
     }
 
@@ -72,20 +93,34 @@ impl Interpreter {
         let spawn_name = self.spawn_name;
         let spawn_with_stdio_name = self.spawn_with_stdio_name;
 
-        for trap in self.traps.iter() {
-            scope.add_named_value(&trap.name, Value::Foreign(trap.clone()));
+        for (sigstr, signum) in &REGISTERED_SIGNALS {
+            scope.add_named_value(&sigstr, (*signum).into());
         }
 
         scope.add_named_value("stdio/inherit", Value::Integer(Integer::from_u8(0)));
         scope.add_named_value("stdio/piped", Value::Integer(Integer::from_u8(1)));
         scope.add_named_value("stdio/null", Value::Integer(Integer::from_u8(2)));
 
-        ketos_closure!(scope, "trap", |traps: &TrapMap, callback: &Lambda| -> usize {
-            traps.add(callback)
+        let trap_traps = self.traps.clone();
+        ketos_closure!(scope, "trap", |signum: i32, callback: &Lambda| -> usize {
+            if let Some(trapmap) = trap_traps.get(&signum) {
+                trapmap.add(callback)
+            } else {
+                Err(ketos_err(format!("unknown signum {}", signum)))
+            }
         });
 
-        ketos_closure!(scope, "untrap", |traps: &TrapMap, key: usize| -> bool {
-            traps.remove(key)
+        let untrap_traps = self.traps.clone();
+        ketos_closure!(scope, "untrap", |signum: i32, key: usize| -> () {
+            if let Some(trapmap) = untrap_traps.get(&signum) {
+                if trapmap.remove(key) {
+                    Ok(())
+                } else {
+                    Err(ketos_err(format!("unknown key {} for signum {}", key, signum)))
+                }
+            } else {
+                Err(ketos_err(format!("unknown signum {}", signum)))
+            }
         });
 
         ketos_closure!(scope, "set-env", |key: &str, value: &str| -> () {
@@ -376,33 +411,6 @@ impl Interpreter {
         );
     }
 
-    pub fn trigger_signal(&self, sig: Signal) -> Vec<Result<Value, Error>> {
-        if !self.is_root {
-            panic!("Signals can only be triggered on the root interpreter");
-        }
-
-        let sig_int: u8 = match sig {
-            Signal::Continue => 0,
-            Signal::Interrupt => 1,
-            Signal::Quit => 2,
-            Signal::Resize => 3,
-            Signal::Suspend => 4,
-            _ => unimplemented!(),
-        };
-
-        let args = vec![Value::Integer(Integer::from_u8(sig_int))];
-        let interp = self.interp.clone();
-        let interp = (*interp).borrow();
-
-        self.traps
-            .iter()
-            .filter(|t| t.index == sig_int)
-            .take(1)
-            .flat_map(|t| t.get())
-            .map(|t| interp.call_value(Value::Lambda(t), args.clone()))
-            .collect()
-    }
-
     pub fn execute(&self, exprs: &str, path: Option<String>) -> Result<Option<(Value, Value)>, Error> {
         let mut values = self.interp.parse_exprs(exprs, path)?;
 
@@ -419,8 +427,17 @@ impl Interpreter {
         let input_value = self.rewrite_exprs(input_value, 0, 0);
         let code = compile(self.interp.context(), &input_value)?;
         let output_value = self.interp.execute_code(Rc::new(code))?;
+        let processed = Some((input_value, output_value));
 
-        Ok(Some((input_value, output_value)))
+        for signum in self.signals.pending() {
+            let trapmap = self.traps.get(&signum).expect("expected a trapmap");
+
+            for callback in trapmap.get() {
+                self.interp.call_value(Value::Lambda(callback), vec![signum.into()])?;
+            }
+        }
+
+        Ok(processed)
     }
 
     fn rewrite_exprs(&self, value: Value, stdin: u8, stdout: u8) -> Value {

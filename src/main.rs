@@ -7,6 +7,7 @@ extern crate ketos_derive;
 extern crate linefeed;
 #[cfg(unix)]
 extern crate nix;
+extern crate signal_hook;
 
 mod builtins;
 mod error;
@@ -105,7 +106,7 @@ fn run() -> i32 {
         }
     }
 
-    let interp = builtins::Interpreter::new(builder.finish(), true);
+    let interp = builtins::Interpreter::new(builder.finish());
     interp.add_builtins();
 
     tui::set_thread_context({
@@ -261,10 +262,6 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
 
     interface.set_completer(completer.clone());
     interface.set_report_signal(Signal::Interrupt, true);
-    interface.set_report_signal(Signal::Continue, true);
-    interface.set_report_signal(Signal::Resize, true);
-    interface.set_report_signal(Signal::Suspend, true);
-    interface.set_report_signal(Signal::Quit, true);
     interface.define_function("knosh-accepter", Arc::new(Accepter));
     interface.bind_sequence("\r", Command::from_str("knosh-accepter"));
     interface.bind_sequence("\n", Command::from_str("knosh-accepter"));
@@ -291,13 +288,6 @@ fn run_repl(interp: &builtins::Interpreter) -> io::Result<()> {
                 ketos_interp.clear_codemap();
             }
             ReadResult::Signal(sig) => {
-                for result in interp.trigger_signal(sig) {
-                    match result {
-                        Ok(value) => ketos_interp.display_value(&value),
-                        Err(err) => display_error(&interp, "", &err),
-                    }
-                }
-
                 if sig == Signal::Interrupt {
                     println!("^C");
                     interface.cancel_read_line()?;
