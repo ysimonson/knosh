@@ -427,8 +427,10 @@ impl Interpreter {
         let input_value = self.rewrite_exprs(input_value, 0, 0);
         let code = compile(self.interp.context(), &input_value)?;
         let output_value = self.interp.execute_code(Rc::new(code))?;
-        let processed = Some((input_value, output_value));
+        Ok(Some((input_value, output_value)))
+    }
 
+    pub fn flush_signals(&self) -> Result<(), Error> {
         for signum in self.signals.pending() {
             let trapmap = self.traps.get(&signum).expect("expected a trapmap");
 
@@ -437,7 +439,7 @@ impl Interpreter {
             }
         }
 
-        Ok(processed)
+        Ok(())
     }
 
     fn rewrite_exprs(&self, value: Value, stdin: u8, stdout: u8) -> Value {

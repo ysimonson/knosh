@@ -308,7 +308,7 @@ pub fn print_execution_result(
     error_prefix: &str,
     path: Option<String>,
 ) -> bool {
-    match interp.execute(line, path) {
+    let successful = match interp.execute(line, path) {
         Ok(Some((input_value, output_value))) => {
             if let Ok(p) = <&builtins::Proc>::from_value_ref(&output_value) {
                 match p.wait() {
@@ -316,12 +316,18 @@ pub fn print_execution_result(
                         if !exit_code.success() {
                             let err = ketos_err(format!("proc did not exit successfully: {:?}", exit_code));
                             display_error(&interp, error_prefix, &err);
-                            return false;
+                            false
+                        } else {
+                            if let Some(completer) = completer {
+                                update_arg_completions(interp, completer, input_value);
+                            }
+                    
+                            true
                         }
                     },
                     Err(err) => {
                         display_error(&interp, error_prefix, &err);
-                        return false;
+                        false
                     }
                 }
             } else if let Ok(p) = <&builtins::Pipe>::from_value_ref(&output_value) {
@@ -329,26 +335,42 @@ pub fn print_execution_result(
 
                 if !errs.is_empty() {
                     display_error(&interp, error_prefix, errs.first().unwrap());
-                    return false;
+                    false
+                } else {
+                    if let Some(completer) = completer {
+                        update_arg_completions(interp, completer, input_value);
+                    }
+
+                    true
                 }
             } else if let Value::Unit = output_value {
-                // don't print anything
+                if let Some(completer) = completer {
+                    update_arg_completions(interp, completer, input_value);
+                }
+
+                true
             } else {
                 interp.inner().display_value(&output_value);
-            }
+                
+                if let Some(completer) = completer {
+                    update_arg_completions(interp, completer, input_value);
+                }
 
-            // Update the args completer
-            if let Some(completer) = completer {
-                update_arg_completions(interp, completer, input_value);
+                true
             }
-
-            true
         }
         Ok(None) => true,
         Err(err) => {
             display_error(&interp, error_prefix, &err);
             false
         }
+    };
+
+    if let Err(err) = interp.flush_signals() {
+        display_error(&interp, error_prefix, &err);
+        false
+    } else {
+        successful
     }
 }
 
