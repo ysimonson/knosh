@@ -152,7 +152,7 @@ Values:
 * `signal/usr2`: SIGUSR2
 * `signal/winch`: SIGWINCH
 
-See here](http://man7.org/linux/man-pages/man7/signal.7.html) for details on what the signals mean.
+See [here](http://man7.org/linux/man-pages/man7/signal.7.html) for details on what the signals mean.
 
 ### Shell management
 
