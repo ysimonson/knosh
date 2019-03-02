@@ -127,20 +127,32 @@ Functions:
 * `(cd dir:string) -> string`: Changes the current working directory.
 * `(pwd) -> string`: Returns the current working directory as an absolute path.
 
-### Traps
-
-**Note:** At the moment, traps only work in the repl, and cannot be used from executing scripts.
+### Signals
 
 Functions:
 * `(trap s:signal callback:lambda) -> integer`: Adds a callback to execute on a given signal. Returns a trap key.
 * `(untrap s:signal i:integer)`: Removes a callback as identified by a signal and trap key.
 
 Values:
-* `signal/continue`: A value representing `SIGCONT`.
-* `signal/interrupt`: A value representing `SIGINT`.
-* `signal/quit`: A value representing `SIGQUIT`.
-* `signal/resize`: A value representing `SIGWINCH` (window resize.)
-* `signal/suspend`: A value representing `SIGTSTP`.
+* `signal/abrt`: SIGABRT
+* `signal/alrm`: SIGALRM
+* `signal/bus`: SIGBUS
+* `signal/chld`: SIGCHLD
+* `signal/cont`: SIGCONT
+* `signal/hup`: SIGHUP
+* `signal/int`: SIGINT
+* `signal/io`: SIGIO
+* `signal/pipe`: SIGPIPE
+* `signal/prof`: SIGPROF
+* `signal/quit`: SIGQUIT
+* `signal/sys`: SIGSYS
+* `signal/term`: SIGTERM
+* `signal/trap`: SIGTRAP
+* `signal/usr1`: SIGUSR1
+* `signal/usr2`: SIGUSR2
+* `signal/winch`: SIGWINCH
+
+See here](http://man7.org/linux/man-pages/man7/signal.7.html) for details on what the signals mean.
 
 ### Shell management
 
