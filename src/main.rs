@@ -10,7 +10,6 @@ extern crate nix;
 
 mod builtins;
 mod error;
-mod executor;
 mod tui;
 mod util;
 
@@ -319,7 +318,7 @@ pub fn print_execution_result(
     error_prefix: &str,
     path: Option<String>,
 ) -> bool {
-    match executor::exprs(interp, line, path) {
+    match interp.execute(line, path) {
         Ok(Some((input_value, output_value))) => {
             if let Ok(p) = <&builtins::Proc>::from_value_ref(&output_value) {
                 match p.wait() {
