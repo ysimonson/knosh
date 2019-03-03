@@ -65,14 +65,7 @@ Procs can also be piped like so:
 
 Spawn functions:
 * `(spawn name:string arg1:stringifiable ... argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
-* `(spawn-with-stdio stdin:stdio stdout:stdio stderr:stdio name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. Valid stdio are:
-  * Another proc: it will take that proc's stdout or stdin.
-  * A proc's stdin (fetched with `(stdin)`, see below.)
-  * A proc's stdout (fetched with `(stdout)`, see below.)
-  * A proc's stderr (fetched with `(stderr)`, see below.)
-  * `stdio/inherit`: Inherits the shell's stdio value.
-  * `stdio/piped`: Buffers the stdio for interactivity from the shell or from another proc.
-  * `stdio/null`: The equivalent to `/dev/null`.
+* `(spawn-with-stdio stdin:stdio stdout:stdio stderr:stdio name:string arg1:stringifiable ... argn:stringifiable) -> proc`: Spawns a process with the given name, arguments, and stdio. You can either pass a proc in as stdio, or a stdio value/function, as documented below.
 * `(exec name:string arg1:stringifiable ... argn:stringifiable)`: Execs a process (i.e. the shell process is replaced) with the given name and arguments.
 
 Proc management functions:
@@ -84,10 +77,10 @@ Proc management functions:
 * `(pid p:proc) -> integer`: Returns the proc's pid.
 
 Stdio functions:
-* `(| p1:proc ... pn:proc)`: Pipes procs's stdouts to stdins.
-* `(stdin p:proc)`: Gets the stdin of `p`.
-* `(stdout p:proc)`: Gets the stdout of `p`.
-* `(stderr p:proc)`: Gets the stderr of `p`.
+* `(| p1:proc ... pn:proc) -> proc`: Pipes procs's stdouts to stdins. Returns the last proc in the chain.
+* `(stdin p:proc) -> stdin`: Gets the stdin of `p`. 
+* `(stdout p:proc) -> stdout`: Gets the stdout of `p`.
+* `(stderr p:proc) -> stderr`: Gets the stderr of `p`.
 * `(stdin/write i:stdin bytes:bytes)`: Writes `bytes` to `i`.
 * `(stdin/fd i:stdin) -> integer`: Returns `i`'s underlying fd.
 * `(stdout/read o:stdout limit:integer) -> bytes`: Reads up to `limit` bytes from `o`. If `limit` is 0, everything until an EOF is returned.
@@ -96,6 +89,11 @@ Stdio functions:
 * `(stderr/read e:stderr limit:integer) -> bytes`: Reads up to `limit` bytes from `e`. If `limit` is 0, everything until an EOF is returned.
 * `(stderr/read-line e:stderr) -> string`: Reads up to the next newline from `e`, returning the decoded string.
 * `(stderr/fd e:stderr) -> integer`: Returns `e`'s underlying fd.
+
+Stdio values:
+* `stdio/inherit`: Inherits the shell's stdio value.
+* `stdio/piped`: Buffers the stdio for interactivity from the shell or from another proc.
+* `stdio/null`: The equivalent to `/dev/null`.
 
 ### Subinterps
 
