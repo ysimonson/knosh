@@ -57,6 +57,12 @@ Procs are child processes in knosh. You kickstart procs like so:
 (spawn '("ls" "-l"))
 ```
 
+Procs can also be piped like so:
+
+```lisp
+(| ((ls -l) (grep foo)))
+```
+
 Spawn functions:
 * `(spawn name:string arg1:stringifiable ... argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
 * `(spawn-with-stdio stdin:integer stdout:integer stderr:integer name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. See values below for possible stdio values.
@@ -71,6 +77,7 @@ Proc management functions:
 * `(pid p:proc) -> integer`: Returns the proc's pid.
 
 Stdio functions:
+* `(| proc1:proc ... procn:proc)`: Pipes procs's stdouts to stdins.
 * `(stdin/write i:stdin bytes:bytes)`: Writes `bytes` to `i`.
 * `(stdin/fd i:stdin) -> integer`: Returns `i`'s underlying fd.
 * `(stdout/read o:stdout limit:integer) -> bytes`: Reads up to `limit` bytes from `o`. If `limit` is 0, everything until an EOF is returned.
@@ -84,18 +91,6 @@ Stdio values:
 * `stdio/inherit`: A value that specifies that a process should inherit the stdio from the shell.
 * `stdio/piped`: A value that specifies that a process should pipe the stdio.
 * `stdio/null`: A value that specifies that a process should suppress the stdio.
-
-### Pipes
-
-Procs can also be piped like so:
-
-```lisp
-(| ((ls -l) (grep foo)))
-```
-
-Functions:
-* `(| p1:proc ... pn:proc) -> pipe`: Executes a pipe with the given procs.
-* `(wait p:pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
 
 ### Subinterps
 
