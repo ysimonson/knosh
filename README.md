@@ -115,6 +115,7 @@ Functions:
 * `(set-env name:string value:string)`: Sets an environment variable.
 * `(env name:string) -> string`: Gets an environment variable.
 * `(del-env name:string)`: Deletes an environment variable.
+* `(with-env name:string value:string callback:value) -> value`: Runs the `callback` with the environment variable `name` set to `value`. This is like `with-dir`, but for environment variables.
 
 ### Paths
 
