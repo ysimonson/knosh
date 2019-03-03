@@ -224,6 +224,30 @@ impl Interpreter {
             })
         });
 
+        let with_env_interp = self.interp.clone();
+        scope.add_value_with_name("with-env", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(3), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let env_key = <&str>::from_value_ref(iter.next().unwrap())?;
+                let env_value = <&str>::from_value_ref(iter.next().unwrap())?;
+                let value = iter.next().unwrap();
+
+                let original_env_value = env::var(env_key).ok();
+                env::set_var(env_key, env_value);
+                let result = with_env_interp.call_value(value.clone(), Vec::new());
+
+                if let Some(original_env_value) = original_env_value {
+                    env::set_var(env_key, original_env_value);
+                } else {
+                    env::remove_var(env_key);
+                }
+
+                result
+            })
+        });
+
         #[cfg(unix)]
         scope.add_value_with_name("fork", |name| {
             Value::new_foreign_fn(name, move |_, args| {
