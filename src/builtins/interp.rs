@@ -200,6 +200,30 @@ impl Interpreter {
             Ok(path.into_os_string())
         });
 
+        let with_dir_interp = self.interp.clone();
+        scope.add_value_with_name("with-dir", |name| {
+            Value::new_foreign_fn(name, move |_, args| {
+                check_arity(Arity::Exact(2), args.len(), name)?;
+
+                let mut iter = (&*args).iter();
+                let new_dir = <&str>::from_value_ref(iter.next().unwrap())?;
+                let value = iter.next().unwrap();
+
+                let original_dir = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
+                let original_dir_str = original_dir.to_str().map(|s| s.to_string());
+                env::set_current_dir(util::expand_path(new_dir)?).map_err(|err| ketos_err(format!("{}: {}", new_dir, err)))?;
+                let result = with_dir_interp.call_value(value.clone(), Vec::new());
+
+                if let Some(original_dir_str) = original_dir_str {
+                    env::set_current_dir(original_dir).map_err(|err| ketos_err(format!("{}: {}", original_dir_str, err)))?;
+                } else {
+                    env::set_current_dir(original_dir).map_err(|err| ketos_err(format!("{}", err)))?;
+                }
+
+                result
+            })
+        });
+
         #[cfg(unix)]
         scope.add_value_with_name("fork", |name| {
             Value::new_foreign_fn(name, move |_, args| {
