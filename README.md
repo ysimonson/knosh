@@ -65,18 +65,13 @@ Procs can also be piped like so:
 
 Spawn functions:
 * `(spawn name:string arg1:stringifiable ... argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
-* `(spawn-with-stdio stdin:inputtable stdout:outputtable stderr:output name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. Valid inputtables are:
-  * Another proc: it will take that proc's stdout.
+* `(spawn-with-stdio stdin:stdio stdout:stdio stderr:stdio name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. Valid stdio are:
+  * Another proc: it will take that proc's stdout or stdin.
+  * A proc's stdin (fetched with `(stdin)`, see below.)
   * A proc's stdout (fetched with `(stdout)`, see below.)
   * A proc's stderr (fetched with `(stderr)`, see below.)
-  * `stdio/inherit`: Inherits the shell's stdin.
-  * `stdio/piped`: Pipes the stdin.
-  * `stdio/null`: The equivalent to `/dev/null`.
-Valid outputtables are:
-  * Another proc: it will take that proc's stdin.
-  * A proc's stdin (fetched with `(stdin)`, see below.)
-  * `stdio/inherit`: Inherits the shell's stdout or stderr.
-  * `stdio/piped`: Pipes the stdout or stderr.
+  * `stdio/inherit`: Inherits the shell's stdio value.
+  * `stdio/piped`: Buffers the stdio for interactivity from the shell or from another proc.
   * `stdio/null`: The equivalent to `/dev/null`.
 * `(exec name:string arg1:stringifiable ... argn:stringifiable)`: Execs a process (i.e. the shell process is replaced) with the given name and arguments.
 
