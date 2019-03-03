@@ -49,6 +49,7 @@ const REGISTERED_SIGNALS: [(&str, i32); 17] = [
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
+    pipe_name: Name,
     pub spawn_name: Name,
     pub spawn_with_stdio_name: Name,
     stdio_inherit_name: Name,
@@ -60,9 +61,10 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter) -> Self {
-        let (spawn_name, spawn_with_stdio_name, stdio_inherit_name, stdio_piped_name, stdio_null_name) = {
+        let (pipe_name, spawn_name, spawn_with_stdio_name, stdio_inherit_name, stdio_piped_name, stdio_null_name) = {
             let scope = interp.scope();
             (
+                scope.add_name("|"),
                 scope.add_name("spawn"),
                 scope.add_name("spawn-with-stdio"),
                 scope.add_name("stdio/inherit"),
@@ -81,6 +83,7 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
+            pipe_name: pipe_name,
             spawn_name,
             spawn_with_stdio_name,
             stdio_inherit_name,
@@ -421,7 +424,7 @@ impl Interpreter {
             _ => values.into(),
         };
 
-        let input_value = self.rewrite_exprs(input_value);
+        let input_value = self.rewrite_exprs(input_value, None, None);
         let code = compile(self.interp.context(), &input_value)?;
         let output_value = self.interp.execute_code(Rc::new(code))?;
         Ok(Some((input_value, output_value)))
@@ -439,18 +442,38 @@ impl Interpreter {
         Ok(())
     }
 
-    fn rewrite_exprs(&self, value: Value) -> Value {
+    fn rewrite_exprs(&self, value: Value, stdin: Option<Value>, stdout: Option<Value>) -> Value {
         let scope = self.interp.scope();
 
         match value {
             Value::List(list) => {
                 let list_v = list.into_vec();
+                let list_count = list_v.len();
                 let mut iter = list_v.into_iter();
                 let first_value = iter.next().unwrap();
-                let mut new_list = vec![];
+                let mut new_list = Vec::new();
 
                 if let Value::Name(first_name) = first_value {
-                    if is_system_operator(first_name) {
+                    if first_name == self.pipe_name {
+                        // This is a pipe call
+                        let mut last: Option<Value> = None;
+                        let mut i = 0;
+
+                        while let Some(value) = iter.next() {
+                            if i == list_count - 2 {
+                                last = Some(self.rewrite_exprs(value, last, None));
+                            } else {
+                                last = Some(self.rewrite_exprs(value, last, Some(Value::Keyword(self.stdio_piped_name))));
+                                i += 1;
+                            }
+                        }
+
+                        if let Some(last) = last {
+                            return last;
+                        }  else {
+                            return Value::Unit;
+                        }
+                    } else if is_system_operator(first_name) {
                         // These system operators need special handling because they
                         // support lists where the first value can be a bare name
 
@@ -475,14 +498,19 @@ impl Interpreter {
                     } else if !is_system_fn(first_name) && !scope.contains_name(first_name) {
                         // Looks like this expr is shaped like a function call, to a
                         // function that does not exist. Change this into a call to
-                        // `proc`.
+                        // `spawn-with-stdio`.
 
-                        new_list.extend(vec![Value::Name(self.spawn_name)]);
-                        new_list.push({
-                            let name_store = scope.borrow_names();
-                            let first_name_str = name_store.get(first_name);
-                            first_name_str.into()
-                        });
+                        new_list.extend(vec![
+                            Value::Name(self.spawn_with_stdio_name),
+                            stdin.unwrap_or_else(|| Value::Keyword(self.stdio_inherit_name)),
+                            stdout.unwrap_or_else(|| Value::Keyword(self.stdio_inherit_name)),
+                            Value::Keyword(self.stdio_inherit_name),
+                            {
+                                let name_store = scope.borrow_names();
+                                let first_name_str = name_store.get(first_name);
+                                first_name_str.into()
+                            }
+                        ]);
                     } else {
                         new_list.push(first_value);
                     }
@@ -490,7 +518,7 @@ impl Interpreter {
                     new_list.push(first_value);
                 }
 
-                new_list.extend(iter.map(|value| self.rewrite_exprs(value)));
+                new_list.extend(iter.map(|value| self.rewrite_exprs(value, None, None)));
                 new_list.into()
             }
             Value::Name(name) if !is_system_fn(name) && !is_system_operator(name) && !scope.contains_name(name) => {
