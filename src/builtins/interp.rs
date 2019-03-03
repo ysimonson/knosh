@@ -615,7 +615,7 @@ fn to_input_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_na
 fn to_output_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
     if let Value::Foreign(_) = value {
         if let Ok(p) = <&Proc>::from_value_ref(value) {
-            Ok(p.stdout()?.take()?.into())
+            Ok(p.stdin()?.take()?.into())
         } else if let Ok(stdin) = <&Stdin>::from_value_ref(value) {
             Ok(stdin.take()?.into())
         } else {

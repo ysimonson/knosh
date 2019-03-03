@@ -65,7 +65,19 @@ Procs can also be piped like so:
 
 Spawn functions:
 * `(spawn name:string arg1:stringifiable ... argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
-* `(spawn-with-stdio stdin:integer stdout:integer stderr:integer name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. See values below for possible stdio values.
+* `(spawn-with-stdio stdin:inputtable stdout:outputtable stderr:output name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. Valid inputtables are:
+  * Another proc: it will take that proc's stdout.
+  * A proc's stdout (fetched with `(stdout)`, see below.)
+  * A proc's stderr (fetched with `(stderr)`, see below.)
+  * `stdio/inherit`: Inherits the shell's stdin.
+  * `stdio/piped`: Pipes the stdin.
+  * `stdio/null`: The equivalent to `/dev/null`.
+  Valid outputtables are:
+  * Another proc: it will take that proc's stdin.
+  * A proc's stdin (fetched with `(stdin)`, see below.)
+  * `stdio/inherit`: Inherits the shell's stdout or stderr.
+  * `stdio/piped`: Pipes the stdout or stderr.
+  * `stdio/null`: The equivalent to `/dev/null`.
 * `(exec name:string arg1:stringifiable ... argn:stringifiable)`: Execs a process (i.e. the shell process is replaced) with the given name and arguments.
 
 Proc management functions:
@@ -89,11 +101,6 @@ Stdio functions:
 * `(stderr/read e:stderr limit:integer) -> bytes`: Reads up to `limit` bytes from `e`. If `limit` is 0, everything until an EOF is returned.
 * `(stderr/read-line e:stderr) -> string`: Reads up to the next newline from `e`, returning the decoded string.
 * `(stderr/fd e:stderr) -> integer`: Returns `e`'s underlying fd.
-
-Stdio values:
-* `stdio/inherit`: A value that specifies that a process should inherit the stdio from the shell.
-* `stdio/piped`: A value that specifies that a process should pipe the stdio.
-* `stdio/null`: A value that specifies that a process should suppress the stdio.
 
 ### Subinterps
 
