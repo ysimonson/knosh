@@ -72,7 +72,7 @@ Spawn functions:
   * `stdio/inherit`: Inherits the shell's stdin.
   * `stdio/piped`: Pipes the stdin.
   * `stdio/null`: The equivalent to `/dev/null`.
-  Valid outputtables are:
+Valid outputtables are:
   * Another proc: it will take that proc's stdin.
   * A proc's stdin (fetched with `(stdin)`, see below.)
   * `stdio/inherit`: Inherits the shell's stdout or stderr.
