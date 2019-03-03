@@ -16,14 +16,14 @@ use ketos::exec::ExecError;
 use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::function::{Arity, Lambda};
 use ketos::value::FromValueRef;
-use ketos::{Bytes, Error, Integer, Interpreter as KetosInterpreter, Name, Value};
+use ketos::{Bytes, Error, Interpreter as KetosInterpreter, Name, Value};
 use signal_hook;
 use signal_hook::iterator::Signals;
 
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult};
 
-use super::{ExitStatus, Pipe, Proc, SubInterp, TrapMap};
+use super::{ExitStatus, Proc, SubInterp, TrapMap, Stdin, Stdout, Stderr};
 use crate::error::ketos_err;
 use crate::util;
 
@@ -52,15 +52,25 @@ pub struct Interpreter {
     pipe_name: Name,
     pub spawn_name: Name,
     pub spawn_with_stdio_name: Name,
+    stdio_inherit_name: Name,
+    stdio_piped_name: Name,
+    stdio_null_name: Name,
     signals: Signals,
     traps: Rc<HashMap<i32, TrapMap>>,
 }
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter) -> Self {
-        let (pipe_name, spawn_name, spawn_with_stdio_name) = {
+        let (pipe_name, spawn_name, spawn_with_stdio_name, stdio_inherit_name, stdio_piped_name, stdio_null_name) = {
             let scope = interp.scope();
-            (scope.add_name("|"), scope.add_name("spawn"), scope.add_name("spawn-with-stdio"))
+            (
+                scope.add_name("|"),
+                scope.add_name("spawn"),
+                scope.add_name("spawn-with-stdio"),
+                scope.add_name("stdio/inherit"),
+                scope.add_name("stdio/piped"),
+                scope.add_name("stdio/null"),
+            )
         };
 
         let mut signums = Vec::new();
@@ -76,6 +86,9 @@ impl Interpreter {
             pipe_name,
             spawn_name,
             spawn_with_stdio_name,
+            stdio_inherit_name,
+            stdio_piped_name,
+            stdio_null_name,
             signals: Signals::new(signums).expect("could not register signal listeners"),
             traps: Rc::new(traps),
         }
@@ -92,14 +105,13 @@ impl Interpreter {
         let pipe_name = self.pipe_name;
         let spawn_name = self.spawn_name;
         let spawn_with_stdio_name = self.spawn_with_stdio_name;
+        let stdio_inherit_name = self.stdio_inherit_name;
+        let stdio_piped_name = self.stdio_piped_name;
+        let stdio_null_name = self.stdio_null_name;
 
         for (sigstr, signum) in &REGISTERED_SIGNALS {
             scope.add_named_value(&sigstr, (*signum).into());
         }
-
-        scope.add_named_value("stdio/inherit", Value::Integer(Integer::from_u8(0)));
-        scope.add_named_value("stdio/piped", Value::Integer(Integer::from_u8(1)));
-        scope.add_named_value("stdio/null", Value::Integer(Integer::from_u8(2)));
 
         let trap_traps = self.traps.clone();
         ketos_closure!(scope, "trap", |signum: i32, callback: &Lambda| -> usize {
@@ -232,9 +244,9 @@ impl Interpreter {
             Value::new_foreign_fn(spawn_with_stdio_name, move |_, args| {
                 check_arity(Arity::Min(4), args.len(), spawn_with_stdio_name)?;
                 let mut iter = (&*args).iter();
-                let stdin = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
-                let stdout = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
-                let stderr = to_stdio_value(u8::from_value_ref(iter.next().unwrap())?)?;
+                let stdin = to_input_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
+                let stdout = to_output_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
+                let stderr = to_output_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
                 let (name, args) = proc_args(iter)?;
                 let p = Proc::new(name, args, stdin, stdout, stderr)?;
                 Ok(p.into())
@@ -264,14 +276,6 @@ impl Interpreter {
                 if let Ok(p) = <&Proc>::from_value_ref(value) {
                     p.wait()?;
                     Ok(().into())
-                } else if let Ok(p) = <&Pipe>::from_value_ref(value) {
-                    let mut errors = p.wait();
-
-                    if let Some(err) = errors.pop() {
-                        Err(err)
-                    } else {
-                        Ok(().into())
-                    }
                 } else if let Ok(p) = <&SubInterp>::from_value_ref(value) {
                     p.wait()?;
                     Ok(().into())
@@ -300,38 +304,50 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "stdout/read", |p: &Proc, limit: usize| -> Bytes {
-            p.read_stdout(limit)
+        ketos_closure!(scope, "stdin", |p: &Proc| -> Stdin {
+            p.stdin()
         });
 
-        ketos_closure!(scope, "stdout/read-to-newline", |p: &Proc| -> String {
-            p.read_stdout_to_newline()
+        ketos_closure!(scope, "stdout", |p: &Proc| -> Stdout {
+            p.stdout()
         });
 
-        ketos_closure!(scope, "stdout/read-to-end", |p: &Proc| -> Bytes {
-            p.read_stdout_to_end()
+        ketos_closure!(scope, "stderr", |p: &Proc| -> Stderr {
+            p.stderr()
         });
 
-        ketos_closure!(scope, "stderr/read", |p: &Proc, limit: usize| -> Bytes {
-            p.read_stderr(limit)
+        ketos_closure!(scope, "stdout/read", |stdout: &Stdout, limit: usize| -> Bytes {
+            if limit > 0 {
+                stdout.read(limit)
+            } else {
+                stdout.read_to_end()
+            }
         });
 
-        ketos_closure!(scope, "stderr/read-to-newline", |p: &Proc| -> String {
-            p.read_stderr_to_newline()
+        ketos_closure!(scope, "stdout/read-line", |stdout: &Stdout| -> String {
+            stdout.read_to_newline()
         });
 
-        ketos_closure!(scope, "stderr/read-to-end", |p: &Proc| -> Bytes {
-            p.read_stderr_to_end()
+        ketos_closure!(scope, "stderr/read", |stderr: &Stderr, limit: usize| -> Bytes {
+            if limit > 0 {
+                stderr.read(limit)
+            } else {
+                stderr.read_to_end()
+            }
         });
 
-        ketos_closure!(scope, "stdin/read-to-newline", || -> String {
+        ketos_closure!(scope, "stderr/read-line", |stderr: &Stderr| -> String {
+            stderr.read_to_newline()
+        });
+
+        ketos_closure!(scope, "stdin/read-line", || -> String {
             let mut buf = String::new();
             io::BufReader::new(io::stdin()).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdin: {}", err)))?;
             Ok(buf.into())
         });
 
-        ketos_closure!(scope, "stdin/write", |p: &Proc, bytes: &[u8]| -> () {
-            Ok(p.write(bytes)?.into())
+        ketos_closure!(scope, "stdin/write", |stdin: &Stdin, bytes: &[u8]| -> () {
+            Ok(stdin.write(bytes)?.into())
         });
 
         #[cfg(unix)]
@@ -342,8 +358,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let p = <&Proc>::from_value_ref(value)?;
-                    Ok(p.stdin_fd()?.into())
+                    let stdin = <&Stdin>::from_value_ref(value)?;
+                    Ok(stdin.fd()?.into())
                 } else {
                     Ok(io::stdin().as_raw_fd().into())
                 }
@@ -358,8 +374,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let p = <&Proc>::from_value_ref(value)?;
-                    Ok(p.stdout_fd()?.into())
+                    let stdout = <&Stdout>::from_value_ref(value)?;
+                    Ok(stdout.fd()?.into())
                 } else {
                     Ok(io::stdout().as_raw_fd().into())
                 }
@@ -374,8 +390,8 @@ impl Interpreter {
                 let mut iter = (&*args).iter();
 
                 if let Some(value) = iter.next() {
-                    let p = <&Proc>::from_value_ref(value)?;
-                    Ok(p.stderr_fd()?.into())
+                    let stderr = <&Stderr>::from_value_ref(value)?;
+                    Ok(stderr.fd()?.into())
                 } else {
                     Ok(io::stderr().as_raw_fd().into())
                 }
@@ -394,21 +410,6 @@ impl Interpreter {
         ketos_closure!(scope, "exit/signal", |status: &ExitStatus| -> Option<i32> {
             Ok(status.signal())
         });
-
-        scope.add_value(
-            pipe_name,
-            Value::new_foreign_fn(pipe_name, move |_, args| {
-                check_arity(Arity::Min(2), args.len(), pipe_name)?;
-
-                let iter = (&*args).iter();
-
-                let ps: Result<Vec<&Proc>, ExecError> = iter.map(|arg| {
-                    <&Proc>::from_value_ref(arg)
-                }).collect();
-
-                Ok(Pipe::new(ps?)?.into())
-            }),
-        );
     }
 
     pub fn execute(&self, exprs: &str, path: Option<String>) -> Result<Option<(Value, Value)>, Error> {
@@ -552,15 +553,6 @@ fn type_error(expected: &'static str, value: &Value) -> Error {
     err.into()
 }
 
-fn to_stdio_value(i: u8) -> Result<process::Stdio, Error> {
-    match i {
-        0 => Ok(process::Stdio::inherit()),
-        1 => Ok(process::Stdio::piped()),
-        2 => Ok(process::Stdio::null()),
-        _ => Err(ketos_err(format!("invalid stdio value: `{}`", i)))
-    }
-}
-
 fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> {
     let value = iter.next().unwrap();
 
@@ -602,4 +594,50 @@ fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> 
         .collect();
 
     Ok((name, args_str?))
+}
+
+fn to_input_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+    if let Value::Foreign(_) = value {
+        if let Ok(p) = <&Proc>::from_value_ref(value) {
+            Ok(p.stdout()?.take()?.into())
+        } else if let Ok(stdout) = <&Stdout>::from_value_ref(value) {
+            Ok(stdout.take()?.into())
+        } else if let Ok(stderr) = <&Stderr>::from_value_ref(value) {
+            Ok(stderr.take()?.into())
+        } else {
+            Err(type_error("outputtable", value))
+        }
+    } else {
+        to_stdio_value(value, inherit_name, piped_name, null_name)
+    }
+}
+
+fn to_output_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+    if let Value::Foreign(_) = value {
+        if let Ok(p) = <&Proc>::from_value_ref(value) {
+            Ok(p.stdout()?.take()?.into())
+        } else if let Ok(stdin) = <&Stdin>::from_value_ref(value) {
+            Ok(stdin.take()?.into())
+        } else {
+            Err(type_error("inputtable", value))
+        }
+    } else {
+        to_stdio_value(value, inherit_name, piped_name, null_name)
+    }
+}
+
+// TODO: add support for files
+fn to_stdio_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+    match value {
+        Value::Keyword(name) if name == inherit_name => {
+            Ok(process::Stdio::inherit())
+        }
+        Value::Keyword(name) if name == piped_name => {
+            Ok(process::Stdio::piped())
+        }
+        Value::Keyword(name) if name == null_name => {
+            Ok(process::Stdio::null())
+        }
+        _ => Err(type_error("stdio", value))
+    }
 }

@@ -11,6 +11,58 @@ use ketos::{Bytes, Error};
 
 use crate::error::ketos_err;
 
+macro_rules! stdio_impl {
+    ($name:ident, $underlying:ty) => {
+        #[derive(Debug, ForeignValue, FromValue, FromValueRef, IntoValue)]
+        pub struct $name(RefCell<Option<$underlying>>);
+
+        impl $name {
+            fn new(underlying: $underlying) -> Self {
+                Self { 0: RefCell::new(Some(underlying)) }
+            }
+
+            #[cfg(unix)]
+            pub fn fd(&self) -> Result<i32, Error> {
+                Ok(self.take()?.as_raw_fd())
+            }
+
+            pub fn take(&self) -> Result<$underlying, Error> {
+                self.0.borrow_mut().take().ok_or_else(|| ketos_err("stdio unavailable"))
+            }
+        }
+    }
+}
+
+macro_rules! output_impl {
+    ($name:ty) => {
+        impl $name {
+            pub fn read(&self, limit: usize) -> Result<Bytes, Error> {
+                let mut buf = Vec::with_capacity(limit);
+                let mut underlying = self.0.borrow_mut();
+                let stdio = underlying.as_mut().ok_or_else(|| ketos_err("stdio unavailable"))?;
+                let read = stdio.read(&mut buf).map_err(|err| ketos_err(format!("could not read from stdio: {}", err)))?;
+                Ok(Bytes::new(buf[..read].to_vec()))
+            }
+
+            pub fn read_to_newline(&self) -> Result<String, Error> {
+                let mut buf = String::new();
+                let mut underlying = self.0.borrow_mut();
+                let stdio = underlying.as_mut().ok_or_else(|| ketos_err("stdio unavailable"))?;
+                BufReader::new(stdio).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdio: {}", err)))?;
+                Ok(buf)
+            }
+
+            pub fn read_to_end(&self) -> Result<Bytes, Error> {
+                let mut buf = Vec::new();
+                let mut underlying = self.0.borrow_mut();
+                let stdio = underlying.as_mut().ok_or_else(|| ketos_err("stdio unavailable"))?;
+                let read = stdio.read_to_end(&mut buf).map_err(|err| ketos_err(format!("could not read from stdio: {}", err)))?;
+                Ok(Bytes::new(buf[..read].to_vec()))
+            }
+        }
+    }
+}
+
 #[derive(Debug, ForeignValue, FromValue, FromValueRef, IntoValue)]
 pub struct Proc(RefCell<process::Child>);
 
@@ -45,91 +97,36 @@ impl Proc {
         self.0.borrow().id()
     }
 
-    pub fn read_stdout(&self, limit: usize) -> Result<Bytes, Error> {
-        let mut buf = Vec::with_capacity(limit);
-        let mut child = self.0.borrow_mut();
-        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
-        let read = stdout.read(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
-        Ok(Bytes::new(buf[..read].to_vec()))
+    pub fn stdin(&self) -> Result<Stdin, Error> {
+        let stdin = self.0.borrow_mut().stdin.take().ok_or_else(|| ketos_err("stdio unavailable"))?;
+        Ok(Stdin::new(stdin))
     }
 
-    pub fn read_stdout_to_newline(&self) -> Result<String, Error> {
-        let mut buf = String::new();
-        let mut child = self.0.borrow_mut();
-        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
-        BufReader::new(stdout).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdout: {}", err)))?;
-        Ok(buf)
+    pub fn stdout(&self) -> Result<Stdout, Error> {
+        let stdout = self.0.borrow_mut().stdout.take().ok_or_else(|| ketos_err("stdio unavailable"))?;
+        Ok(Stdout::new(stdout))
     }
 
-    pub fn read_stdout_to_end(&self) -> Result<Bytes, Error> {
-        let mut buf = Vec::new();
-        let mut child = self.0.borrow_mut();
-        let stdout = child.stdout.as_mut().ok_or_else(|| ketos_err("proc stdout not piped"))?;
-        let read = stdout.read_to_end(&mut buf).map_err(|err| ketos_err(format!("could not read from stdout: {}", err)))?;
-        Ok(Bytes::new(buf[..read].to_vec()))
-    }
-
-     pub fn read_stderr(&self, limit: usize) -> Result<Bytes, Error> {
-        let mut buf = Vec::with_capacity(limit);
-        let mut child = self.0.borrow_mut();
-        let stderr = child.stderr.as_mut().ok_or_else(|| ketos_err("proc stderr not piped"))?;
-        let read = stderr.read(&mut buf).map_err(|err| ketos_err(format!("could not read from stderr: {}", err)))?;
-        Ok(Bytes::new(buf[..read].to_vec()))
-    }
-
-    pub fn read_stderr_to_newline(&self) -> Result<String, Error> {
-        let mut buf = String::new();
-        let mut child = self.0.borrow_mut();
-        let stderr = child.stderr.as_mut().ok_or_else(|| ketos_err("proc stderr not piped"))?;
-        BufReader::new(stderr).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stderr: {}", err)))?;
-        Ok(buf)
-    }
-
-    pub fn read_stderr_to_end(&self) -> Result<Bytes, Error> {
-        let mut buf = Vec::new();
-        let mut child = self.0.borrow_mut();
-        let stderr = child.stderr.as_mut().ok_or_else(|| ketos_err("proc stderr not piped"))?;
-        let read = stderr.read_to_end(&mut buf).map_err(|err| ketos_err(format!("could not read from stderr: {}", err)))?;
-        Ok(Bytes::new(buf[..read].to_vec()))
-    }
-
-    pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
-        let mut child = self.0.borrow_mut();
-        let stdin = child.stdin.as_mut().ok_or_else(|| ketos_err("proc stdin not piped"))?;
-        stdin
-            .write_all(bytes)
-            .map_err(|err| ketos_err(format!("could not write for proc: {}", err)))
-    }
-
-    #[cfg(unix)]
-    pub fn stdin_fd(&self) -> Result<i32, Error> {
-        let child = self.0.borrow();
-        let stdin = child.stdin.as_ref().ok_or_else(|| ketos_err("proc stdin not piped"))?;
-        Ok(stdin.as_raw_fd())
-    }
-
-    #[cfg(unix)]
-    pub fn stdout_fd(&self) -> Result<i32, Error> {
-        let child = self.0.borrow();
-        let stdout = child.stdout.as_ref().ok_or_else(|| ketos_err("proc stdout not piped"))?;
-        Ok(stdout.as_raw_fd())
-    }
-
-    #[cfg(unix)]
-    pub fn stderr_fd(&self) -> Result<i32, Error> {
-        let child = self.0.borrow();
-        let stderr = child.stderr.as_ref().ok_or_else(|| ketos_err("proc stderr not piped"))?;
-        Ok(stderr.as_raw_fd())
-    }
-
-    pub fn take_stdout(&self) -> Result<process::ChildStdout, Error> {
-        self.0.borrow_mut().stdout.take().ok_or_else(|| ketos_err("proc stdout unavailable"))
-    }
-
-    pub fn take_stdin(&self) -> Result<process::ChildStdin, Error> {
-        self.0.borrow_mut().stdin.take().ok_or_else(|| ketos_err("proc stdin unavailable"))
+    pub fn stderr(&self) -> Result<Stderr, Error> {
+        let stderr = self.0.borrow_mut().stderr.take().ok_or_else(|| ketos_err("stdio unavailable"))?;
+        Ok(Stderr::new(stderr))
     }
 }
+
+stdio_impl!(Stdin, process::ChildStdin);
+impl Stdin {
+    pub fn write(&self, bytes: &[u8]) -> Result<(), Error> {
+        let mut underlying = self.0.borrow_mut();
+        let stdio = underlying.as_mut().ok_or_else(|| ketos_err("stdio unavailable"))?;
+        stdio.write_all(bytes).map_err(|err| ketos_err(format!("could not write to stdin: {}", err)))
+    }
+}
+
+stdio_impl!(Stdout, process::ChildStdout);
+output_impl!(Stdout);
+
+stdio_impl!(Stderr, process::ChildStderr);
+output_impl!(Stderr);
 
 #[derive(Debug, ForeignValue, FromValueRef, IntoValue)]
 pub struct ExitStatus(process::ExitStatus);

@@ -58,9 +58,9 @@ Procs are child processes in knosh. You kickstart procs like so:
 ```
 
 Spawn functions:
-* `(spawn name:string, arg1:stringifiable, ..., argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
-* `(spawn-with-stdio stdin:integer stdout:integer stderr:integer name:string, arg1:stringifiable, ..., argn:stringifiable)`: Spawns a process with the given name, arguemnts, and stdio. See values below for possible stdio values.
-* `(exec name:string, arg1:stringifiable, ..., argn:stringifiable)`: Execs a process (i.e. the shell process is replaced) with the given name and arguments.
+* `(spawn name:string arg1:stringifiable ... argn:stringifiable [stdio]) -> proc`: Spawns a process with the given name and arguments.
+* `(spawn-with-stdio stdin:integer stdout:integer stderr:integer name:string arg1:stringifiable ... argn:stringifiable)`: Spawns a process with the given name, arguments, and stdio. See values below for possible stdio values.
+* `(exec name:string arg1:stringifiable ... argn:stringifiable)`: Execs a process (i.e. the shell process is replaced) with the given name and arguments.
 
 Proc management functions:
 * `(wait p:proc) -> exitstatus`: Waits for a proc to finish, returning its exit status.
@@ -71,16 +71,14 @@ Proc management functions:
 * `(pid p:proc) -> integer`: Returns the proc's pid.
 
 Stdio functions:
-* `(stdin/write p:proc, bytes:bytes)`: Writes the bytes to the proc's stdin. Note this only works if the proc's stdin is piped.
-* `(stdin/fd p:proc) -> integer`: Returns the proc's stdin fd.
-* `(stdout/read p:proc limit:integer) -> bytes`: Reads up to `limit` bytes from `p`'s stdout.
-* `(stdout/read-to-newline p:proc) -> string`: Reads up to the next newline from `p`'s stdout, returning the decoded string.
-* `(stdout/read-to-end p:proc) -> bytes`: Reads from `p`'s stdout until EOF.
-* `(stdout/fd p:proc) -> integer`: Returns the proc's stdout fd.
-* `(stderr/read p:proc) -> bytes`: Reads up to `limit` bytes from `p`'s stderr.
-* `(stderr/read-to-newline p:proc) -> string`: Reads up to the next newline from `p`'s stderr, returning the decoded string.
-* `(stderr/read-to-end p:proc) -> bytes`: Reads from `p`'s stderr until EOF.
-* `(stderr/fd p:proc) -> integer`: Returns the proc's stderr fd.
+* `(stdin/write i:stdin bytes:bytes)`: Writes `bytes` to `i`.
+* `(stdin/fd i:stdin) -> integer`: Returns `i`'s underlying fd.
+* `(stdout/read o:stdout limit:integer) -> bytes`: Reads up to `limit` bytes from `o`. If `limit` is 0, everything until an EOF is returned.
+* `(stdout/read-line o:stdout) -> string`: Reads up to the next newline from `o`, returning the decoded string.
+* `(stdout/fd o:stdout) -> integer`: Returns `o`'s underlying fd.
+* `(stderr/read e:stderr limit:integer) -> bytes`: Reads up to `limit` bytes from `e`. If `limit` is 0, everything until an EOF is returned.
+* `(stderr/read-line e:stderr) -> string`: Reads up to the next newline from `e`, returning the decoded string.
+* `(stderr/fd e:stderr) -> integer`: Returns `e`'s underlying fd.
 
 Stdio values:
 * `stdio/inherit`: A value that specifies that a process should inherit the stdio from the shell.
@@ -96,7 +94,7 @@ Procs can also be piped like so:
 ```
 
 Functions:
-* `(| p1:proc, ..., pn:proc) -> pipe`: Executes a pipe with the given procs.
+* `(| p1:proc ... pn:proc) -> pipe`: Executes a pipe with the given procs.
 * `(wait p:pipe)`: Waits for all procs in the pipe to finish. After all of the procs are finished, the first error that was encountered is thrown.
 
 ### Subinterps
@@ -159,7 +157,7 @@ See [here](http://man7.org/linux/man-pages/man7/signal.7.html) for details on wh
 Functions:
 * `(exit code:integer)`: exits the shell with the given code
 * `(pid) -> integer`: Returns the shell's pid.
-* `(stdin/read-to-newline)`: Reads from the shell's stdin until a newline, returning a string.
+* `(stdin/read-line)`: Reads from the shell's stdin until a newline, returning a string.
 * `(stdin/fd) -> integer`: Returns the shell's stdin fd.
 * `(stdout/fd) -> integer`: Returns the shell's stdout fd.
 * `(stderr/fd) -> integer`: Returns the shell's stderr fd.

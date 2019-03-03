@@ -330,19 +330,6 @@ pub fn print_execution_result(
                         false
                     }
                 }
-            } else if let Ok(p) = <&builtins::Pipe>::from_value_ref(&output_value) {
-                let errs = p.wait();
-
-                if !errs.is_empty() {
-                    display_error(&interp, error_prefix, errs.first().unwrap());
-                    false
-                } else {
-                    if let Some(completer) = completer {
-                        update_arg_completions(interp, completer, input_value);
-                    }
-
-                    true
-                }
             } else if let Value::Unit = output_value {
                 if let Some(completer) = completer {
                     update_arg_completions(interp, completer, input_value);
