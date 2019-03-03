@@ -77,7 +77,10 @@ Proc management functions:
 * `(pid p:proc) -> integer`: Returns the proc's pid.
 
 Stdio functions:
-* `(| proc1:proc ... procn:proc)`: Pipes procs's stdouts to stdins.
+* `(| p1:proc ... pn:proc)`: Pipes procs's stdouts to stdins.
+* `(stdin p:proc)`: Gets the stdin of `p`.
+* `(stdout p:proc)`: Gets the stdout of `p`.
+* `(stderr p:proc)`: Gets the stderr of `p`.
 * `(stdin/write i:stdin bytes:bytes)`: Writes `bytes` to `i`.
 * `(stdin/fd i:stdin) -> integer`: Returns `i`'s underlying fd.
 * `(stdout/read o:stdout limit:integer) -> bytes`: Reads up to `limit` bytes from `o`. If `limit` is 0, everything until an EOF is returned.
