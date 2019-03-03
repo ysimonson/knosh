@@ -49,7 +49,6 @@ const REGISTERED_SIGNALS: [(&str, i32); 17] = [
 
 pub struct Interpreter {
     interp: Rc<KetosInterpreter>,
-    pipe_name: Name,
     pub spawn_name: Name,
     pub spawn_with_stdio_name: Name,
     stdio_inherit_name: Name,
@@ -61,10 +60,9 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new(interp: KetosInterpreter) -> Self {
-        let (pipe_name, spawn_name, spawn_with_stdio_name, stdio_inherit_name, stdio_piped_name, stdio_null_name) = {
+        let (spawn_name, spawn_with_stdio_name, stdio_inherit_name, stdio_piped_name, stdio_null_name) = {
             let scope = interp.scope();
             (
-                scope.add_name("|"),
                 scope.add_name("spawn"),
                 scope.add_name("spawn-with-stdio"),
                 scope.add_name("stdio/inherit"),
@@ -83,7 +81,6 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
-            pipe_name,
             spawn_name,
             spawn_with_stdio_name,
             stdio_inherit_name,
@@ -102,7 +99,6 @@ impl Interpreter {
         let interp_scope = self.interp.clone();
         let scope = interp_scope.scope();
         let interp_fork = self.interp.clone();
-        let pipe_name = self.pipe_name;
         let spawn_name = self.spawn_name;
         let spawn_with_stdio_name = self.spawn_with_stdio_name;
         let stdio_inherit_name = self.stdio_inherit_name;
@@ -425,7 +421,7 @@ impl Interpreter {
             _ => values.into(),
         };
 
-        let input_value = self.rewrite_exprs(input_value, 0, 0);
+        let input_value = self.rewrite_exprs(input_value);
         let code = compile(self.interp.context(), &input_value)?;
         let output_value = self.interp.execute_code(Rc::new(code))?;
         Ok(Some((input_value, output_value)))
@@ -443,13 +439,12 @@ impl Interpreter {
         Ok(())
     }
 
-    fn rewrite_exprs(&self, value: Value, stdin: u8, stdout: u8) -> Value {
+    fn rewrite_exprs(&self, value: Value) -> Value {
         let scope = self.interp.scope();
 
         match value {
             Value::List(list) => {
                 let list_v = list.into_vec();
-                let list_count = list_v.len();
                 let mut iter = list_v.into_iter();
                 let first_value = iter.next().unwrap();
                 let mut new_list = vec![];
@@ -477,35 +472,12 @@ impl Interpreter {
                             }
                             _ => (),
                         }
-                    } else if first_name == self.pipe_name {
-                        // This is a pipe call
-
-                        new_list.push(Value::Name(first_name));
-                        let mut i = 0;
-
-                        while let Some(value) = iter.next() {
-                            let (stdin, stdout) = if i == 0 {
-                                (0, 1)
-                            } else if i == list_count - 2 {
-                                (1, 0)
-                            } else {
-                                (1, 1)
-                            };
-
-                            new_list.push(self.rewrite_exprs(value, stdin, stdout));
-                            i += 1;
-                        }
                     } else if !is_system_fn(first_name) && !scope.contains_name(first_name) {
                         // Looks like this expr is shaped like a function call, to a
                         // function that does not exist. Change this into a call to
                         // `proc`.
 
-                        new_list.extend(vec![
-                            Value::Name(self.spawn_with_stdio_name),
-                            stdin.into(),
-                            stdout.into(),
-                            0.into(),
-                        ]);
+                        new_list.extend(vec![Value::Name(self.spawn_name)]);
                         new_list.push({
                             let name_store = scope.borrow_names();
                             let first_name_str = name_store.get(first_name);
@@ -518,7 +490,7 @@ impl Interpreter {
                     new_list.push(first_value);
                 }
 
-                new_list.extend(iter.map(|value| self.rewrite_exprs(value, 0, 0)));
+                new_list.extend(iter.map(|value| self.rewrite_exprs(value)));
                 new_list.into()
             }
             Value::Name(name) if !is_system_fn(name) && !is_system_operator(name) && !scope.contains_name(name) => {
