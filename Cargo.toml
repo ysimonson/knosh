@@ -8,7 +8,7 @@ edition = "2018"
 dirs = "1.0"
 gumdrop = "0.5"
 ketos_derive = "0.10.0"
-linefeed = "0.5.3"
+linefeed = "0.5.4"
 nix = "0.13.0"
 signal-hook = "0.1.8"
 
