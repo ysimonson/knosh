@@ -194,7 +194,7 @@ fn executables() -> BTreeSet<String> {
         Err(_) => return executables
     };
 
-    for dirpath in path.split(":") {
+    for dirpath in path.split(':') {
         let entries = match fs::read_dir(dirpath) {
             Ok(e) => e,
             Err(_) => continue

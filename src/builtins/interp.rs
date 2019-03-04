@@ -83,7 +83,7 @@ impl Interpreter {
 
         Self {
             interp: Rc::new(interp),
-            pipe_name: pipe_name,
+            pipe_name,
             spawn_name,
             spawn_with_stdio_name,
             stdio_inherit_name,
@@ -291,9 +291,9 @@ impl Interpreter {
             Value::new_foreign_fn(spawn_with_stdio_name, move |_, args| {
                 check_arity(Arity::Min(4), args.len(), spawn_with_stdio_name)?;
                 let mut iter = (&*args).iter();
-                let stdin = to_input_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
-                let stdout = to_output_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
-                let stderr = to_output_value(iter.next().unwrap(), &stdio_inherit_name, &stdio_piped_name, &stdio_null_name)?;
+                let stdin = to_input_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
+                let stdout = to_output_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
+                let stderr = to_output_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
                 let (name, args) = proc_args(iter)?;
                 let p = Proc::new(name, args, stdin, stdout, stderr)?;
                 Ok(p.into())
@@ -390,11 +390,12 @@ impl Interpreter {
         ketos_closure!(scope, "stdin/read-line", || -> String {
             let mut buf = String::new();
             io::BufReader::new(io::stdin()).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdin: {}", err)))?;
-            Ok(buf.into())
+            Ok(buf)
         });
 
         ketos_closure!(scope, "stdin/write", |stdin: &Stdin, bytes: &[u8]| -> () {
-            Ok(stdin.write(bytes)?.into())
+            stdin.write(bytes)?;
+            Ok(())
         });
 
         #[cfg(unix)]
@@ -644,7 +645,7 @@ fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> 
     Ok((name, args_str?))
 }
 
-fn to_input_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+fn to_input_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
     if let Value::Foreign(_) = value {
         if let Ok(p) = <&Proc>::from_value_ref(value) {
             Ok(p.stdout()?.take()?.into())
@@ -660,7 +661,7 @@ fn to_input_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_na
     }
 }
 
-fn to_output_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+fn to_output_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
     if let Value::Foreign(_) = value {
         if let Ok(p) = <&Proc>::from_value_ref(value) {
             Ok(p.stdin()?.take()?.into())
@@ -675,15 +676,15 @@ fn to_output_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_n
 }
 
 // TODO: add support for files
-fn to_stdio_value(value: &Value, inherit_name: &Name, piped_name: &Name, null_name: &Name) -> Result<process::Stdio, Error> {
+fn to_stdio_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
     match value {
-        Value::Keyword(name) if name == inherit_name => {
+        Value::Keyword(name) if name == &inherit_name => {
             Ok(process::Stdio::inherit())
         }
-        Value::Keyword(name) if name == piped_name => {
+        Value::Keyword(name) if name == &piped_name => {
             Ok(process::Stdio::piped())
         }
-        Value::Keyword(name) if name == null_name => {
+        Value::Keyword(name) if name == &null_name => {
             Ok(process::Stdio::null())
         }
         _ => Err(type_error("stdio", value))

@@ -122,10 +122,8 @@ fn run() -> i32 {
         if !interactive && !print_execution_result(&interp, None, &expr, "", None) {
             return 1;
         }
-    } else if !opts.free.is_empty() {
-        if !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
-            return 1;
-        }
+    } else if !opts.free.is_empty() && !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
+        return 1;
     }
 
     if interactive {
