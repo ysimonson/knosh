@@ -319,10 +319,10 @@ pub fn print_execution_result(
                             if let Some(completer) = completer {
                                 update_arg_completions(interp, completer, input_value);
                             }
-                    
+
                             true
                         }
-                    },
+                    }
                     Err(err) => {
                         display_error(&interp, error_prefix, &err);
                         false
@@ -336,7 +336,7 @@ pub fn print_execution_result(
                 true
             } else {
                 interp.inner().display_value(&output_value);
-                
+
                 if let Some(completer) = completer {
                     update_arg_completions(interp, completer, input_value);
                 }
@@ -372,7 +372,7 @@ fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Co
                         }
                     }
                 }
-            },
+            }
             Some(Value::Name(first_name)) if first_name == &interp.spawn_with_stdio_name => {
                 let mut iter = iter.skip(3);
 
@@ -383,7 +383,7 @@ fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Co
                         }
                     }
                 }
-            },
+            }
             _ => {}
         }
     }

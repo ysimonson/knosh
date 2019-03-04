@@ -2,19 +2,19 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead};
+use std::os::unix::process::CommandExt;
 use std::process;
 use std::rc::Rc;
-use std::usize;
 use std::slice::Iter;
-use std::os::unix::process::CommandExt;
+use std::usize;
 
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
 use ketos::compile::compile;
 use ketos::exec::ExecError;
-use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::function::{Arity, Lambda};
+use ketos::name::{is_system_fn, is_system_operator, standard_names};
 use ketos::value::FromValueRef;
 use ketos::{Bytes, Error, Interpreter as KetosInterpreter, Name, Value};
 use signal_hook;
@@ -23,7 +23,7 @@ use signal_hook::iterator::Signals;
 #[cfg(unix)]
 use nix::unistd::{fork, ForkResult};
 
-use super::{ExitStatus, Proc, SubInterp, TrapMap, Stdin, Stdout, Stderr};
+use super::{ExitStatus, Proc, Stderr, Stdin, Stdout, SubInterp, TrapMap};
 use crate::error::ketos_err;
 use crate::util;
 
@@ -211,11 +211,13 @@ impl Interpreter {
 
                 let original_dir = env::current_dir().map_err(|err| ketos_err(format!("{}", err)))?;
                 let original_dir_str = original_dir.to_str().map(|s| s.to_string());
-                env::set_current_dir(util::expand_path(new_dir)?).map_err(|err| ketos_err(format!("{}: {}", new_dir, err)))?;
+                env::set_current_dir(util::expand_path(new_dir)?)
+                    .map_err(|err| ketos_err(format!("{}: {}", new_dir, err)))?;
                 let result = with_dir_interp.call_value(value.clone(), Vec::new());
 
                 if let Some(original_dir_str) = original_dir_str {
-                    env::set_current_dir(original_dir).map_err(|err| ketos_err(format!("{}: {}", original_dir_str, err)))?;
+                    env::set_current_dir(original_dir)
+                        .map_err(|err| ketos_err(format!("{}: {}", original_dir_str, err)))?;
                 } else {
                     env::set_current_dir(original_dir).map_err(|err| ketos_err(format!("{}", err)))?;
                 }
@@ -281,7 +283,13 @@ impl Interpreter {
                 check_arity(Arity::Min(1), args.len(), spawn_name)?;
                 let iter = (&*args).iter();
                 let (name, args) = proc_args(iter)?;
-                let p = Proc::new(name, args, process::Stdio::inherit(), process::Stdio::inherit(), process::Stdio::inherit())?;
+                let p = Proc::new(
+                    name,
+                    args,
+                    process::Stdio::inherit(),
+                    process::Stdio::inherit(),
+                    process::Stdio::inherit(),
+                )?;
                 Ok(p.into())
             }),
         );
@@ -291,9 +299,24 @@ impl Interpreter {
             Value::new_foreign_fn(spawn_with_stdio_name, move |_, args| {
                 check_arity(Arity::Min(4), args.len(), spawn_with_stdio_name)?;
                 let mut iter = (&*args).iter();
-                let stdin = to_input_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
-                let stdout = to_output_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
-                let stderr = to_output_value(iter.next().unwrap(), stdio_inherit_name, stdio_piped_name, stdio_null_name)?;
+                let stdin = to_input_value(
+                    iter.next().unwrap(),
+                    stdio_inherit_name,
+                    stdio_piped_name,
+                    stdio_null_name,
+                )?;
+                let stdout = to_output_value(
+                    iter.next().unwrap(),
+                    stdio_inherit_name,
+                    stdio_piped_name,
+                    stdio_null_name,
+                )?;
+                let stderr = to_output_value(
+                    iter.next().unwrap(),
+                    stdio_inherit_name,
+                    stdio_piped_name,
+                    stdio_null_name,
+                )?;
                 let (name, args) = proc_args(iter)?;
                 let p = Proc::new(name, args, stdin, stdout, stderr)?;
                 Ok(p.into())
@@ -306,9 +329,7 @@ impl Interpreter {
                 check_arity(Arity::Min(1), args.len(), spawn_name)?;
                 let iter = (&*args).iter();
                 let (name, args) = proc_args(iter)?;
-                let err = process::Command::new(name)
-                    .args(args)
-                    .exec();
+                let err = process::Command::new(name).args(args).exec();
                 Err(ketos_err(format!("{}", err)))
             })
         });
@@ -332,9 +353,7 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "poll", |p: &Proc| -> Option<ExitStatus> {
-            p.poll()
-        });
+        ketos_closure!(scope, "poll", |p: &Proc| -> Option<ExitStatus> { p.poll() });
 
         scope.add_value_with_name("pid", |name| {
             Value::new_foreign_fn(name, move |_, args| {
@@ -351,17 +370,11 @@ impl Interpreter {
             })
         });
 
-        ketos_closure!(scope, "stdin", |p: &Proc| -> Stdin {
-            p.stdin()
-        });
+        ketos_closure!(scope, "stdin", |p: &Proc| -> Stdin { p.stdin() });
 
-        ketos_closure!(scope, "stdout", |p: &Proc| -> Stdout {
-            p.stdout()
-        });
+        ketos_closure!(scope, "stdout", |p: &Proc| -> Stdout { p.stdout() });
 
-        ketos_closure!(scope, "stderr", |p: &Proc| -> Stderr {
-            p.stderr()
-        });
+        ketos_closure!(scope, "stderr", |p: &Proc| -> Stderr { p.stderr() });
 
         ketos_closure!(scope, "stdout/read", |stdout: &Stdout, limit: usize| -> Bytes {
             if limit > 0 {
@@ -389,7 +402,9 @@ impl Interpreter {
 
         ketos_closure!(scope, "stdin/read-line", || -> String {
             let mut buf = String::new();
-            io::BufReader::new(io::stdin()).read_line(&mut buf).map_err(|err| ketos_err(format!("could not read string from stdin: {}", err)))?;
+            io::BufReader::new(io::stdin())
+                .read_line(&mut buf)
+                .map_err(|err| ketos_err(format!("could not read string from stdin: {}", err)))?;
             Ok(buf)
         });
 
@@ -512,14 +527,15 @@ impl Interpreter {
                             if i == list_count - 2 {
                                 last = Some(self.rewrite_exprs(value, last, None));
                             } else {
-                                last = Some(self.rewrite_exprs(value, last, Some(Value::Keyword(self.stdio_piped_name))));
+                                last =
+                                    Some(self.rewrite_exprs(value, last, Some(Value::Keyword(self.stdio_piped_name))));
                                 i += 1;
                             }
                         }
 
                         if let Some(last) = last {
                             return last;
-                        }  else {
+                        } else {
                             return Value::Unit;
                         }
                     } else if is_system_operator(first_name) {
@@ -558,7 +574,7 @@ impl Interpreter {
                                 let name_store = scope.borrow_names();
                                 let first_name_str = name_store.get(first_name);
                                 first_name_str.into()
-                            }
+                            },
                         ]);
                     } else {
                         new_list.push(first_value);
@@ -645,7 +661,12 @@ fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> 
     Ok((name, args_str?))
 }
 
-fn to_input_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
+fn to_input_value(
+    value: &Value,
+    inherit_name: Name,
+    piped_name: Name,
+    null_name: Name,
+) -> Result<process::Stdio, Error> {
     if let Value::Foreign(_) = value {
         if let Ok(p) = <&Proc>::from_value_ref(value) {
             Ok(p.stdout()?.take()?.into())
@@ -661,7 +682,12 @@ fn to_input_value(value: &Value, inherit_name: Name, piped_name: Name, null_name
     }
 }
 
-fn to_output_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
+fn to_output_value(
+    value: &Value,
+    inherit_name: Name,
+    piped_name: Name,
+    null_name: Name,
+) -> Result<process::Stdio, Error> {
     if let Value::Foreign(_) = value {
         if let Ok(p) = <&Proc>::from_value_ref(value) {
             Ok(p.stdin()?.take()?.into())
@@ -676,17 +702,16 @@ fn to_output_value(value: &Value, inherit_name: Name, piped_name: Name, null_nam
 }
 
 // TODO: add support for files
-fn to_stdio_value(value: &Value, inherit_name: Name, piped_name: Name, null_name: Name) -> Result<process::Stdio, Error> {
+fn to_stdio_value(
+    value: &Value,
+    inherit_name: Name,
+    piped_name: Name,
+    null_name: Name,
+) -> Result<process::Stdio, Error> {
     match value {
-        Value::Keyword(name) if name == &inherit_name => {
-            Ok(process::Stdio::inherit())
-        }
-        Value::Keyword(name) if name == &piped_name => {
-            Ok(process::Stdio::piped())
-        }
-        Value::Keyword(name) if name == &null_name => {
-            Ok(process::Stdio::null())
-        }
-        _ => Err(type_error("stdio", value))
+        Value::Keyword(name) if name == &inherit_name => Ok(process::Stdio::inherit()),
+        Value::Keyword(name) if name == &piped_name => Ok(process::Stdio::piped()),
+        Value::Keyword(name) if name == &null_name => Ok(process::Stdio::null()),
+        _ => Err(type_error("stdio", value)),
     }
 }

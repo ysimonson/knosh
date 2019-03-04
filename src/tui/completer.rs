@@ -191,30 +191,30 @@ fn executables() -> BTreeSet<String> {
 
     let path = match env::var("PATH") {
         Ok(p) => p,
-        Err(_) => return executables
+        Err(_) => return executables,
     };
 
     for dirpath in path.split(':') {
         let entries = match fs::read_dir(dirpath) {
             Ok(e) => e,
-            Err(_) => continue
+            Err(_) => continue,
         };
 
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue
+                Err(_) => continue,
             };
 
             let metadata = match entry.metadata() {
                 Ok(m) => m,
-                Err(_) => continue
+                Err(_) => continue,
             };
 
             if !metadata.is_file() {
                 continue;
             }
-        
+
             if let Ok(name) = entry.file_name().into_string() {
                 executables.insert(name);
             }
