@@ -123,7 +123,7 @@ Functions:
 * `(d [dir:string]) -> string`: If an argument is passed, this changes the current working directory. Afterwards, it returns the current working directory as an absolute path.
 * `(cd dir:string) -> string`: Changes the current working directory.
 * `(pwd) -> string`: Returns the current working directory as an absolute path.
-* `(with-env dir:string callback:value) -> value`: Runs the `callback` with the current working directory set to `dir`. This is analogous to a `pushd` and `popd`.
+* `(with-dir dir:string callback:value) -> value`: Runs the `callback` with the current working directory set to `dir`. This is analogous to a `pushd` and `popd`.
 
 ### Signals
 
