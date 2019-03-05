@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::iter::repeat;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ketos::{complete_name, Context};
@@ -65,18 +65,26 @@ impl Completer {
             .collect();
 
         // complete paths
-        if let Ok(path) = util::expand_path(word) {
-            if !word.starts_with("~/") && !word.starts_with("./") && !word.starts_with('/') {
-                if let Some(path) = path.to_str() {
-                    if let Ok(current_dir) = env::current_dir() {
-                        completions.extend(self.path_completions(&current_dir, &path));
+        let current_dir = env::current_dir();
+
+        if let Ok(current_dir) = current_dir {
+            if let Ok(path) = util::expand_path(word) {
+                let relative_to = if path.is_relative() {
+                    Some(current_dir.clone())
+                } else {
+                    None
+                };
+
+                if word.ends_with("/") {
+                    completions.extend(self.path_completions(&path, relative_to, ""));
+                } else if let Some(parent) = path.parent() {
+                    if parent.to_str() != Some("") {
+                        if let Some(Some(s)) = path.file_name().map(|s| s.to_str()) {
+                            completions.extend(self.path_completions(&parent, relative_to, s));
+                        }
+                    } else {
+                        completions.extend(self.path_completions(&current_dir, relative_to, word));
                     }
-                }
-            } else if word.ends_with('/') {
-                completions.extend(self.path_completions(&path, ""));
-            } else if let Some(Some(filename_prefix)) = path.file_name().map(|s| s.to_str()) {
-                if let Some(parent_path) = path.parent() {
-                    completions.extend(self.path_completions(parent_path, filename_prefix));
                 }
             }
         }
@@ -93,7 +101,7 @@ impl Completer {
         completions
     }
 
-    fn path_completions(&self, parent_path: &Path, filename_prefix: &str) -> Vec<Completion> {
+    fn path_completions(&self, parent_path: &Path, relative_to: Option<PathBuf>, filename_prefix: &str) -> Vec<Completion> {
         let mut words = Vec::new();
 
         let siblings = match parent_path.read_dir() {
@@ -113,16 +121,26 @@ impl Completer {
                 None => continue,
             };
 
-            if let Some(sibling_path) = sibling.path().to_str() {
+            let sibling_path = if let Some(relative_to) = relative_to.clone() {
+                if let Ok(p) = sibling.path().strip_prefix(relative_to) {
+                    p.to_path_buf()
+                } else {
+                    sibling.path()
+                }
+            } else {
+                sibling.path()
+            };
+
+            if let Some(sibling_path_str) = sibling_path.to_str() {
                 let is_dir = match sibling.file_type() {
                     Ok(t) => t.is_dir(),
                     Err(_) => false,
                 };
 
                 let completion = if is_dir {
-                    format!("{}/", sibling_path)
+                    format!("{}/", sibling_path_str)
                 } else {
-                    sibling_path.to_string()
+                    sibling_path_str.to_string()
                 };
 
                 words.push(Completion {
