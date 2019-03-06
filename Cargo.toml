@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 dirs = "1.0"
+glob = "0.2"
 gumdrop = "0.5"
 ketos_derive = "0.10.0"
 linefeed = "0.5.4"

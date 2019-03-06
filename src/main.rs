@@ -1,4 +1,5 @@
 extern crate dirs;
+extern crate glob;
 extern crate gumdrop;
 #[macro_use]
 extern crate ketos;

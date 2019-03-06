@@ -33,6 +33,7 @@ In order to save keystrokes, knosh walks the AST at evaluation time and makes a 
 1) Input expressions are automatically wrapped in parens if they don't have them already, so `cd "foo"` becomes `(cd "foo")`.
 2) If the first argument in a list does not refer to a known function, it's automatically converted into a call to run a process, so `ls` becomes `(spawn "ls")`.
 3) If any other argument in the list does not refer to a known name, it's automatically converted into a string, which allows it to act as an argument to a proc. So `ls -l` becomes `(spawn "ls" "-l")`.
+4) Globs are expanded to a list of files, so `./*.txt` expands to a list of all the txt files in the current directory.
 
 ### Auto-completions
 
