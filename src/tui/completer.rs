@@ -101,7 +101,12 @@ impl Completer {
         completions
     }
 
-    fn path_completions(&self, parent_path: &Path, relative_to: Option<PathBuf>, filename_prefix: &str) -> Vec<Completion> {
+    fn path_completions(
+        &self,
+        parent_path: &Path,
+        relative_to: Option<PathBuf>,
+        filename_prefix: &str,
+    ) -> Vec<Completion> {
         let mut words = Vec::new();
 
         let siblings = match parent_path.read_dir() {

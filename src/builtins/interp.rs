@@ -16,8 +16,8 @@ use ketos::compile::compile;
 use ketos::exec::ExecError;
 use ketos::function::{Arity, Lambda};
 use ketos::name::{is_system_fn, is_system_operator, standard_names};
-use ketos::value::FromValueRef;
 use ketos::rc_vec::RcVec;
+use ketos::value::FromValueRef;
 use ketos::{Bytes, Error, Interpreter as KetosInterpreter, Name, Value};
 use signal_hook;
 use signal_hook::iterator::Signals;
@@ -595,11 +595,7 @@ impl Interpreter {
 
                 if arg_str.contains('*') || arg_str.contains('?') {
                     if let Ok(matches) = glob(arg_str) {
-                        let matches: Vec<Value> = matches
-                            .filter_map(|result| {
-                                result.ok().map(Value::Path)
-                            })
-                            .collect();
+                        let matches: Vec<Value> = matches.filter_map(|result| result.ok().map(Value::Path)).collect();
 
                         if matches.is_empty() {
                             Value::Unit
@@ -665,7 +661,7 @@ fn proc_args(mut iter: Iter<Value>) -> Result<(OsString, Vec<OsString>), Error> 
 }
 
 fn proc_arg(value: &Value) -> Result<Vec<OsString>, Error> {
-match value {
+    match value {
         Value::Bool(v) => Ok(vec![format!("{}", v).into()]),
         Value::Float(v) => Ok(vec![format!("{}", v).into()]),
         Value::Integer(v) => Ok(vec![format!("{}", v).into()]),
@@ -676,7 +672,7 @@ match value {
             use std::os::unix::ffi::OsStringExt;
             let bytes = v.clone().into_bytes();
             Ok(vec![OsString::from_vec(bytes)])
-        },
+        }
         Value::List(v) => {
             let result: Result<Vec<Vec<OsString>>, Error> = v.into_iter().map(proc_arg).collect();
             let result: Vec<OsString> = result?.into_iter().flat_map(|s| s).collect();
@@ -687,7 +683,7 @@ match value {
         _ => Err(ketos_err(format!(
             "cannot use non-stringifiable as an argument: `{:?}`",
             value
-        )))
+        ))),
     }
 }
 

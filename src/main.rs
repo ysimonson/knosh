@@ -18,13 +18,12 @@ mod util;
 
 use std::env;
 use std::fs::File;
-use std::io::{self, stderr, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{App, Arg, AppSettings, Error as ClapError};
+use clap::{App, Arg, Error as ClapError};
 use ketos::io::{IoError, IoMode};
 use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use linefeed::{Command, Interface, ReadResult, Signal};
@@ -37,70 +36,96 @@ const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
-        Err(err) => err.exit()
+        Err(err) => err.exit(),
     }
 }
 
 fn run() -> Result<i32, ClapError> {
     let matches = App::new("knosh")
         .version("0.1.0")
-        .arg(Arg::with_name("expr")
-            .short("e")
-            .long("expr")
-            .value_name("EXPR")
-            .help("Evaluate the expression and exit")
-            .takes_value(true))
-        .arg(Arg::with_name("include")
-            .short("i")
-            .long("include")
-            .value_name("DIR")
-            .help("Add DIR to list of module search paths")
-            .multiple(true)
-            .takes_value(true))
-        .arg(Arg::with_name("no_rc")
-            .long("no-rc")
-            .help("Do not run `~/.knoshrc.ket` on startup"))
-        .arg(Arg::with_name("strict")
-            .long("strict")
-            .help("Applies \"strict\" execution restrictions"))
-        .arg(Arg::with_name("execution_time")
-            .long("execution-time")
-            .help("Sets the maximum execution time")
-            .takes_value(true))
-        .arg(Arg::with_name("call_stack_size")
-            .long("call-stack-size")
-            .help("Sets the maximum call frames")
-            .takes_value(true))
-        .arg(Arg::with_name("value_stack_size")
-            .long("value-stack-size")
-            .help("Sets the maximum values stored on the stack")
-            .takes_value(true))
-        .arg(Arg::with_name("namespace_size")
-            .long("namespace-size")
-            .help("Sets the maximum values stored in global namespace")
-            .takes_value(true))
-        .arg(Arg::with_name("memory_limit")
-            .long("memory-limit")
-            .help("Sets the maximum total held memory, in abstract units")
-            .takes_value(true))
-        .arg(Arg::with_name("max_integer_size")
-            .long("max_integer_size")
-            .help("Sets the maximum integer size, in bits")
-            .takes_value(true))
-        .arg(Arg::with_name("max_syntax_nesting")
-            .long("max_syntax_nesting")
-            .help("Sets the maximum nested syntax elements")
-            .takes_value(true))
-        .arg(Arg::with_name("file")
-            .index(1)
-            .value_name("FILE")
-            .help("Executes FILE")
-            .takes_value(true))
-        .arg(Arg::with_name("args")
-            .help("Script args")
-            .multiple(true)
-            .takes_value(true)
-            .last(true))
+        .arg(
+            Arg::with_name("expr")
+                .short("e")
+                .long("expr")
+                .value_name("EXPR")
+                .help("Evaluate the expression and exit")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("include")
+                .short("i")
+                .long("include")
+                .value_name("DIR")
+                .help("Add DIR to list of module search paths")
+                .multiple(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("no_rc")
+                .long("no-rc")
+                .help("Do not run `~/.knoshrc.ket` on startup"),
+        )
+        .arg(
+            Arg::with_name("strict")
+                .long("strict")
+                .help("Applies \"strict\" execution restrictions"),
+        )
+        .arg(
+            Arg::with_name("execution_time")
+                .long("execution-time")
+                .help("Sets the maximum execution time")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("call_stack_size")
+                .long("call-stack-size")
+                .help("Sets the maximum call frames")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("value_stack_size")
+                .long("value-stack-size")
+                .help("Sets the maximum values stored on the stack")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("namespace_size")
+                .long("namespace-size")
+                .help("Sets the maximum values stored in global namespace")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("memory_limit")
+                .long("memory-limit")
+                .help("Sets the maximum total held memory, in abstract units")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("max_integer_size")
+                .long("max_integer_size")
+                .help("Sets the maximum integer size, in bits")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("max_syntax_nesting")
+                .long("max_syntax_nesting")
+                .help("Sets the maximum nested syntax elements")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("file")
+                .index(1)
+                .value_name("FILE")
+                .help("Executes FILE")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("args")
+                .help("Script args")
+                .multiple(true)
+                .takes_value(true)
+                .last(true),
+        )
         .get_matches();
 
     let mut paths = vec![PathBuf::new()];
@@ -109,7 +134,7 @@ fn run() -> Result<i32, ClapError> {
     }
 
     let mut res = if matches.is_present("strict") {
-        RestrictConfig::strict()        
+        RestrictConfig::strict()
     } else {
         RestrictConfig::permissive()
     };
