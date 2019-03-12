@@ -5,9 +5,9 @@ authors = ["Yusuf Simonson <simonson@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+clap = "2.32.0"
 dirs = "1.0"
 glob = "0.2"
-gumdrop = "0.5"
 ketos_derive = "0.10.0"
 linefeed = "0.5.4"
 nix = "0.13.0"

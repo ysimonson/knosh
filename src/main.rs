@@ -1,6 +1,7 @@
+#[macro_use]
+extern crate clap;
 extern crate dirs;
 extern crate glob;
-extern crate gumdrop;
 #[macro_use]
 extern crate ketos;
 #[macro_use]
@@ -23,7 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gumdrop::{Options, ParsingStyle};
+use clap::{App, Arg, AppSettings, Error as ClapError};
 use ketos::io::{IoError, IoMode};
 use ketos::{Builder, Error, FromValueRef, RestrictConfig, Value};
 use linefeed::{Command, Interface, ReadResult, Signal};
@@ -34,79 +35,115 @@ use crate::tui::{is_parseable, Accepter, Completer};
 const SOFT_MAX_PROMPT_LENGTH: u8 = 10;
 
 fn main() {
-    let status = run();
-    std::process::exit(status);
+    match run() {
+        Ok(code) => std::process::exit(code),
+        Err(err) => err.exit()
+    }
 }
 
-#[derive(Options)]
-struct Opts {
-    #[options(free)]
-    free: Vec<String>,
-
-    #[options(help = "Print this help message and exit")]
-    help: bool,
-    #[options(short = "V", help = "Print version and exit")]
-    version: bool,
-
-    #[options(no_long, help = "Evaluate one expression and exit", meta = "EXPR")]
-    expr: Option<String>,
-    #[options(help = "Run interactively even with a file")]
-    interactive: bool,
-    #[options(no_long, help = "Add DIR to list of module search paths", meta = "DIR")]
-    include: Vec<String>,
-    #[options(
-        short = "R",
-        help = "Configure execution restrictions; see `-R help` for more details",
-        meta = "SPEC"
-    )]
-    restrict: Option<String>,
-    #[options(no_short, help = "Do not run ~/.knoshrc.ket on startup")]
-    no_rc: bool,
-}
-
-fn run() -> i32 {
-    let args = std::env::args().collect::<Vec<_>>();
-
-    // Allow arguments that appear to be options to be passed to scripts
-    let opts = match Opts::parse_args(&args[1..], ParsingStyle::StopAtFirstFree) {
-        Ok(opts) => opts,
-        Err(e) => {
-            let _ = writeln!(stderr(), "{}: {}", args[0], e);
-            return 1;
-        }
-    };
-
-    if opts.version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
-        return 0;
-    }
-    if opts.help {
-        println!("Usage: {} [OPTIONS] [FILE] [ARGS]", args[0]);
-        println!();
-        println!("{}", Opts::usage());
-        return 0;
-    }
+fn run() -> Result<i32, ClapError> {
+    let matches = App::new("knosh")
+        .version("0.1.0")
+        .arg(Arg::with_name("expr")
+            .short("e")
+            .long("expr")
+            .value_name("EXPR")
+            .help("Evaluate the expression and exit")
+            .takes_value(true))
+        .arg(Arg::with_name("include")
+            .short("i")
+            .long("include")
+            .value_name("DIR")
+            .help("Add DIR to list of module search paths")
+            .multiple(true)
+            .takes_value(true))
+        .arg(Arg::with_name("no_rc")
+            .long("no-rc")
+            .help("Do not run `~/.knoshrc.ket` on startup"))
+        .arg(Arg::with_name("strict")
+            .long("strict")
+            .help("Applies \"strict\" execution restrictions"))
+        .arg(Arg::with_name("execution_time")
+            .long("execution-time")
+            .help("Sets the maximum execution time")
+            .takes_value(true))
+        .arg(Arg::with_name("call_stack_size")
+            .long("call-stack-size")
+            .help("Sets the maximum call frames")
+            .takes_value(true))
+        .arg(Arg::with_name("value_stack_size")
+            .long("value-stack-size")
+            .help("Sets the maximum values stored on the stack")
+            .takes_value(true))
+        .arg(Arg::with_name("namespace_size")
+            .long("namespace-size")
+            .help("Sets the maximum values stored in global namespace")
+            .takes_value(true))
+        .arg(Arg::with_name("memory_limit")
+            .long("memory-limit")
+            .help("Sets the maximum total held memory, in abstract units")
+            .takes_value(true))
+        .arg(Arg::with_name("max_integer_size")
+            .long("max_integer_size")
+            .help("Sets the maximum integer size, in bits")
+            .takes_value(true))
+        .arg(Arg::with_name("max_syntax_nesting")
+            .long("max_syntax_nesting")
+            .help("Sets the maximum nested syntax elements")
+            .takes_value(true))
+        .arg(Arg::with_name("file")
+            .index(1)
+            .value_name("FILE")
+            .help("Executes FILE")
+            .takes_value(true))
+        .arg(Arg::with_name("args")
+            .help("Script args")
+            .multiple(true)
+            .takes_value(true)
+            .last(true))
+        .get_matches();
 
     let mut paths = vec![PathBuf::new()];
-    paths.extend(opts.include.into_iter().map(PathBuf::from));
-
-    let mut builder = Builder::new().search_paths(paths);
-
-    if let Some(ref res) = opts.restrict {
-        if res == "help" {
-            print_restrict_usage();
-            return 0;
-        }
-
-        builder = match parse_restrict(res) {
-            Ok(res) => builder.restrict(res),
-            Err(e) => {
-                println!("{}: {}", args[0], e);
-                return 1;
-            }
-        }
+    if let Some(paths_str) = matches.values_of("include") {
+        paths.extend(paths_str.into_iter().map(PathBuf::from).collect::<Vec<_>>());
     }
 
+    let mut res = if matches.is_present("strict") {
+        RestrictConfig::strict()        
+    } else {
+        RestrictConfig::permissive()
+    };
+
+    if matches.is_present("execution_time") {
+        let micros = value_t!(matches, "execution_time", u64)?;
+        res.execution_time = Some(Duration::from_micros(micros));
+    }
+
+    if matches.is_present("call_stack_size") {
+        res.call_stack_size = value_t!(matches, "call_stack_size", usize)?;
+    }
+
+    if matches.is_present("value_stack_size") {
+        res.value_stack_size = value_t!(matches, "value_stack_size", usize)?;
+    }
+
+    if matches.is_present("namespace_size") {
+        res.namespace_size = value_t!(matches, "namespace_size", usize)?;
+    }
+
+    if matches.is_present("memory_limit") {
+        res.memory_limit = value_t!(matches, "memory_limit", usize)?;
+    }
+
+    if matches.is_present("max_integer_size") {
+        res.max_integer_size = value_t!(matches, "max_integer_size", usize)?;
+    }
+
+    if matches.is_present("max_syntax_nesting") {
+        res.max_syntax_nesting = value_t!(matches, "max_syntax_nesting", usize)?;
+    }
+
+    let builder = Builder::new().search_paths(paths).restrict(res);
     let interp = builtins::Interpreter::new(builder.finish());
     interp.add_builtins();
 
@@ -115,71 +152,37 @@ fn run() -> i32 {
         ketos_interp.context().clone()
     });
 
-    interp.inner().set_args(&opts.free);
-
-    let interactive = opts.interactive || (opts.free.is_empty() && opts.expr.is_none());
-
-    if let Some(ref expr) = opts.expr {
-        if !interactive && !print_execution_result(&interp, None, &expr, "", None) {
-            return 1;
-        }
-    } else if !opts.free.is_empty() && !run_file(&interp, Path::new(&opts.free[0])) && !interactive {
-        return 1;
+    if let Some(args) = matches.values_of("args") {
+        let args = args.collect::<Vec<_>>();
+        interp.inner().set_args(&args);
     }
 
-    if interactive {
-        if !opts.no_rc {
-            if let Some(p) = dirs::home_dir() {
-                let rc = p.join(".knoshrc");
-                if rc.is_file() {
-                    // Do not bail on error in interactive mode
-                    run_file(&interp, &rc);
-                }
-            }
-        }
-
-        if let Err(e) = run_repl(&interp) {
-            eprintln!("terminal device error: {}", e);
-        }
-    }
-
-    0
-}
-
-fn parse_restrict(params: &str) -> Result<RestrictConfig, String> {
-    let mut res = RestrictConfig::permissive();
-
-    for param in params.split(',') {
-        match param {
-            "permissive" => res = RestrictConfig::permissive(),
-            "strict" => res = RestrictConfig::strict(),
-            _ => {
-                let (name, value) = match param.find('=') {
-                    Some(pos) => (&param[..pos], &param[pos + 1..]),
-                    None => return Err(format!("unrecognized restrict option: {}", param)),
-                };
-
-                match name {
-                    "execution_time" => res.execution_time = Some(Duration::from_millis(parse_param(name, value)?)),
-                    "call_stack_size" => res.call_stack_size = parse_param(name, value)?,
-                    "value_stack_size" => res.value_stack_size = parse_param(name, value)?,
-                    "namespace_size" => res.namespace_size = parse_param(name, value)?,
-                    "memory_limit" => res.memory_limit = parse_param(name, value)?,
-                    "max_integer_size" => res.max_integer_size = parse_param(name, value)?,
-                    "max_syntax_nesting" => res.max_syntax_nesting = parse_param(name, value)?,
-                    _ => return Err(format!("unrecognized parameter: {}", name)),
-                }
+    if !matches.is_present("no_rc") {
+        if let Some(p) = dirs::home_dir() {
+            let rc = p.join(".knoshrc");
+            if rc.is_file() {
+                // Do not bail on error in interactive mode
+                run_file(&interp, &rc);
             }
         }
     }
 
-    Ok(res)
-}
+    if let Some(expr) = matches.value_of("expr") {
+        if !print_execution_result(&interp, None, &expr, "", None) {
+            return Ok(1);
+        }
+    } else if let Some(file) = matches.value_of("file") {
+        if !run_file(&interp, Path::new(file)) {
+            return Ok(1);
+        }
+    } else {
+        if let Err(err) = run_repl(&interp) {
+            eprintln!("terminal device error: {}", err);
+            return Ok(2);
+        }
+    }
 
-fn parse_param<T: FromStr>(name: &str, value: &str) -> Result<T, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid `{}` value: {}", name, value))
+    Ok(0)
 }
 
 fn display_error(interp: &builtins::Interpreter, prefix: &str, err: &Error) {
@@ -388,25 +391,4 @@ fn update_arg_completions(interp: &builtins::Interpreter, completer: Arc<tui::Co
             _ => {}
         }
     }
-}
-
-fn print_restrict_usage() {
-    print!(
-        r#"The `-R` / `--restrict` option accepts a comma-separated list of parameters:
-  permissive
-    Applies "permissive" restrictions (default)
-  strict
-    Applies "strict" restrictions
-  key=value
-    Assigns a value to the named restriction configuration parameter.
-    Accepted keys are:
-      execution_time          Maximum execution time, in milliseconds
-      call_stack_size         Maximum call frames
-      value_stack_size        Maximum values stored on the stack
-      namespace_size          Maximum values stored in global namespace
-      memory_limit            Maximum total held memory, in abstract units
-      max_integer_size        Maximum integer size, in bits
-      max_syntax_nesting      Maximum nested syntax elements
-"#
-    );
 }
